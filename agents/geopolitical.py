@@ -355,8 +355,8 @@ class GeopoliticalAgent(BaseAgent):
         confidence = max(0.0, min(1.0, confidence))
 
         from agents.state import Direction
-        vote = (Direction.LONG if prob_up > 0.55
-                else Direction.SHORT if prob_up < 0.45
+        vote = (Direction.LONG if prob_up > self.long_threshold
+                else Direction.SHORT if prob_up < self.short_threshold
                 else Direction.HOLD)
 
         return AgentResult(

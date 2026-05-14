@@ -26,6 +26,7 @@ from quant_engine.garch import GARCHModel
 from quant_engine.monte_carlo import MonteCarloEngine
 from quant_engine.evt import ExtremeValueModel
 from quant_engine.kelly import KellyCriterion
+from config.settings_manager import settings
 
 logger = logging.getLogger(__name__)
 
@@ -262,17 +263,22 @@ class RiskAgent(BaseAgent):
         # ── New: Liquidity Risk (Volume vs 20D Avg) ───────────────────────
         try:
             import yfinance as yf
-            hist = yf.Ticker(ticker).history(period="3mo", interval="1d")
-            if not hist.empty and len(hist) >= 20:
-                avg_vol = float(hist["Volume"].iloc[-20:].mean())
+            sr = settings.get_section("risk")
+            liq_high = sr.get("liquidity_ratio_high", 1.5)
+            liq_low = sr.get("liquidity_ratio_low", 0.7)
+            min_rolling = settings.get("data.min_rolling_days", 20)
+            medium_period = settings.get("data.medium_period", "3mo")
+            hist = yf.Ticker(ticker).history(period=medium_period, interval="1d")
+            if not hist.empty and len(hist) >= min_rolling:
+                avg_vol = float(hist["Volume"].iloc[-min_rolling:].mean())
                 last_vol = float(hist["Volume"].iloc[-1])
                 liq_ratio = last_vol / avg_vol if avg_vol > 0 else 1.0
-                liq_score = (80.0 if liq_ratio > 1.5 else 55.0 if liq_ratio > 0.7 else 30.0)
+                liq_score = (80.0 if liq_ratio > liq_high else 55.0 if liq_ratio > liq_low else 30.0)
                 factor_scores["liquidity_risk"] = FactorScore(
                     name="Liquidity Risk (Vol Ratio)",
                     value=round(liq_ratio, 3),
                     score=liq_score,
-                    interpretation=f"Volume {liq_ratio:.2f}x 20D avg — {'liquid' if liq_ratio > 1.0 else 'thin/illiquid'}",
+                    interpretation=f"Volume {liq_ratio:.2f}x {min_rolling}D avg — {'liquid' if liq_ratio > 1.0 else 'thin/illiquid'}",
                 )
         except Exception:
             pass
@@ -280,7 +286,9 @@ class RiskAgent(BaseAgent):
         # ── New: Drawdown from ATH ────────────────────────────────────────
         try:
             import yfinance as yf
-            hist2 = yf.Ticker(ticker).history(period="2y", interval="1d")
+            dd_warn_pct = sr.get("drawdown_warning_pct", 30)
+            long_period = settings.get("data.long_period", "2y")
+            hist2 = yf.Ticker(ticker).history(period=long_period, interval="1d")
             if not hist2.empty:
                 ath = float(hist2["High"].max())
                 last_c = float(hist2["Close"].iloc[-1])
@@ -290,26 +298,29 @@ class RiskAgent(BaseAgent):
                     name="Drawdown from ATH",
                     value=round(dd_from_ath, 2),
                     score=dd_score,
-                    interpretation=f"{dd_from_ath:.1f}% below 2Y ATH (${ath:.2f})",
+                    interpretation=f"{dd_from_ath:.1f}% below {long_period} ATH (${ath:.2f})",
                 )
-                if dd_from_ath < -30:
-                    warnings.append(f"Stock is {abs(dd_from_ath):.0f}% below 2Y ATH — deep drawdown.")
+                if dd_from_ath < -dd_warn_pct:
+                    warnings.append(f"Stock is {abs(dd_from_ath):.0f}% below {long_period} ATH — deep drawdown.")
         except Exception:
             pass
 
         # ── New: Tail Ratio (Upside/Downside Asymmetry) ───────────────────
         try:
-            if returns is not None and len(returns) >= 60:
+            tr_positive = sr.get("tail_ratio_positive", 1.2)
+            tr_negative = sr.get("tail_ratio_negative", 0.8)
+            min_tail_days = settings.get("data.min_tail_days", 60)
+            if returns is not None and len(returns) >= min_tail_days:
                 ret_arr = returns.dropna().values
                 p95 = float(np.percentile(ret_arr, 95))
                 p5  = abs(float(np.percentile(ret_arr, 5)))
                 tail_ratio = p95 / p5 if p5 > 0 else 1.0
-                tr_score = (80.0 if tail_ratio > 1.2 else 50.0 if tail_ratio > 0.8 else 25.0)
+                tr_score = (80.0 if tail_ratio > tr_positive else 50.0 if tail_ratio > tr_negative else 25.0)
                 factor_scores["tail_ratio"] = FactorScore(
                     name="Tail Ratio (Up/Down Asymmetry)",
                     value=round(tail_ratio, 3),
                     score=tr_score,
-                    interpretation=f"95th/{abs(5)}th percentile: {tail_ratio:.2f} ({'positive skew' if tail_ratio > 1.0 else 'negative skew'})",
+                    interpretation=f"95th/5th percentile: {tail_ratio:.2f} ({'positive skew' if tail_ratio > 1.0 else 'negative skew'})",
                 )
         except Exception:
             pass
@@ -317,23 +328,26 @@ class RiskAgent(BaseAgent):
         # ── New: Correlation Regime (Rolling 60D vs 252D) ─────────────────
         try:
             import yfinance as yf
-            spy_hist = yf.download("SPY", period="2y", interval="1d", auto_adjust=True, progress=False)
-            tkr_hist = yf.download(ticker, period="2y", interval="1d", auto_adjust=True, progress=False)
+            corr_min = sr.get("correlation_min_days", 60)
+            corr_long = sr.get("correlation_long_days", 252)
+            corr_delta_thresh = sr.get("correlation_delta_threshold", 0.1)
+            spy_hist = yf.download("SPY", period=long_period, interval="1d", auto_adjust=True, progress=False)
+            tkr_hist = yf.download(ticker, period=long_period, interval="1d", auto_adjust=True, progress=False)
             if not spy_hist.empty and not tkr_hist.empty:
                 spy_ret = spy_hist["Close"].squeeze().pct_change().dropna()
                 tkr_ret = tkr_hist["Close"].squeeze().pct_change().dropna()
                 aligned = tkr_ret.align(spy_ret, join="inner")[0]
                 spy_aligned = spy_ret.reindex(aligned.index)
-                if len(aligned) >= 60:
-                    corr_60  = float(aligned.iloc[-60:].corr(spy_aligned.iloc[-60:]))
-                    corr_252 = float(aligned.corr(spy_aligned)) if len(aligned) >= 252 else corr_60
+                if len(aligned) >= corr_min:
+                    corr_60  = float(aligned.iloc[-corr_min:].corr(spy_aligned.iloc[-corr_min:]))
+                    corr_252 = float(aligned.corr(spy_aligned)) if len(aligned) >= corr_long else corr_60
                     corr_delta = corr_60 - corr_252
-                    creg_score = (70.0 if corr_delta < -0.1 else 50.0 if abs(corr_delta) < 0.1 else 30.0)
+                    creg_score = (70.0 if corr_delta < -corr_delta_thresh else 50.0 if abs(corr_delta) < corr_delta_thresh else 30.0)
                     factor_scores["correlation_regime"] = FactorScore(
                         name="Correlation Regime (vs SPY)",
                         value=round(corr_60, 3),
                         score=creg_score,
-                        interpretation=f"60D corr: {corr_60:.2f} vs 252D: {corr_252:.2f} (Δ{corr_delta:+.2f}) — {'decorrelating' if corr_delta < -0.1 else 'correlating' if corr_delta > 0.1 else 'stable'}",
+                        interpretation=f"{corr_min}D corr: {corr_60:.2f} vs {corr_long}D: {corr_252:.2f} (Δ{corr_delta:+.2f}) — {'decorrelating' if corr_delta < -corr_delta_thresh else 'correlating' if corr_delta > corr_delta_thresh else 'stable'}",
                     )
         except Exception:
             pass

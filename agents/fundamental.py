@@ -96,10 +96,13 @@ class FundamentalAgent(BaseAgent):
         }
 
         # ── Valuation Factors ────────────────────────────────────────────
+        pe_cheap = sf.get("pe_cheap", 15)
+        pe_fair = sf.get("pe_fair", 25)
+        pe_expensive = sf.get("pe_expensive", 40)
         if scores.pe_ratio > 0:
-            pe_score = (100.0 if scores.pe_ratio < 15
-                        else 60.0 if scores.pe_ratio < 25
-                        else 30.0 if scores.pe_ratio < 40
+            pe_score = (100.0 if scores.pe_ratio < pe_cheap
+                        else 60.0 if scores.pe_ratio < pe_fair
+                        else 30.0 if scores.pe_ratio < pe_expensive
                         else 10.0)
             factor_scores["pe_ratio"] = FactorScore(
                 name="P/E Ratio (Trailing)",
@@ -238,14 +241,16 @@ class FundamentalAgent(BaseAgent):
 
         # ── New: Return on Assets ─────────────────────────────────────────
         try:
+            roa_strong = sf.get("roa_strong", 15)
+            roa_moderate = sf.get("roa_moderate", 8)
+            roa_weak = sf.get("roa_weak", 3)
             roa = getattr(scores, 'return_on_assets', None)
             if roa is None:
-                # Compute from info
                 roa = info.get('returnOnAssets')
                 if roa is not None:
                     roa = float(roa) * 100
             if roa is not None and roa != 0:
-                roa_score = (90.0 if roa > 15 else 65.0 if roa > 8 else 45.0 if roa > 3 else 20.0)
+                roa_score = (90.0 if roa > roa_strong else 65.0 if roa > roa_moderate else 45.0 if roa > roa_weak else 20.0)
                 factor_scores["roa"] = FactorScore(
                     name="Return on Assets (ROA)",
                     value=round(roa, 2),
@@ -257,10 +262,13 @@ class FundamentalAgent(BaseAgent):
 
         # ── New: Operating Margin ─────────────────────────────────────────
         try:
+            om_strong = sf.get("operating_margin_strong", 25)
+            om_moderate = sf.get("operating_margin_moderate", 15)
+            om_weak = sf.get("operating_margin_weak", 5)
             op_margin = info.get('operatingMargins')
             if op_margin is not None:
                 op_margin = float(op_margin) * 100
-                op_score = (90.0 if op_margin > 25 else 65.0 if op_margin > 15 else 45.0 if op_margin > 5 else 20.0 if op_margin > 0 else 5.0)
+                op_score = (90.0 if op_margin > om_strong else 65.0 if op_margin > om_moderate else 45.0 if op_margin > om_weak else 20.0 if op_margin > 0 else 5.0)
                 factor_scores["operating_margin"] = FactorScore(
                     name="Operating Margin",
                     value=round(op_margin, 2),
@@ -272,21 +280,27 @@ class FundamentalAgent(BaseAgent):
 
         # ── New: Current Ratio (Liquidity) ────────────────────────────────
         try:
+            cr_liquid = sf.get("current_ratio_liquid", 2.0)
+            cr_adequate = sf.get("current_ratio_adequate", 1.5)
+            cr_tight = sf.get("current_ratio_tight", 1.0)
             current_ratio = info.get('currentRatio')
             if current_ratio is not None:
                 cr = float(current_ratio)
-                cr_score = (85.0 if cr > 2.0 else 60.0 if cr > 1.5 else 40.0 if cr > 1.0 else 15.0)
+                cr_score = (85.0 if cr > cr_liquid else 60.0 if cr > cr_adequate else 40.0 if cr > cr_tight else 15.0)
                 factor_scores["current_ratio"] = FactorScore(
                     name="Current Ratio",
                     value=round(cr, 2),
                     score=cr_score,
-                    interpretation=f"Current Ratio: {cr:.2f}x ({'liquid' if cr > 1.5 else 'adequate' if cr > 1.0 else 'tight liquidity'})",
+                    interpretation=f"Current Ratio: {cr:.2f}x ({'liquid' if cr > cr_adequate else 'adequate' if cr > cr_tight else 'tight liquidity'})",
                 )
         except Exception:
             pass
 
         # ── New: Interest Coverage Ratio ──────────────────────────────────
         try:
+            icr_strong = sf.get("interest_coverage_strong", 10)
+            icr_adequate = sf.get("interest_coverage_adequate", 5)
+            icr_weak = sf.get("interest_coverage_weak", 2)
             ebit = None; interest = None
             if inc is not None and not inc.empty:
                 ebit_row = [r for r in inc.index if 'ebit' in str(r).lower() and 'ebitda' not in str(r).lower()]
@@ -297,20 +311,20 @@ class FundamentalAgent(BaseAgent):
                     interest = abs(float(inc.loc[int_row[0]].iloc[0]))
             if ebit is not None and interest and interest > 0:
                 icr = ebit / interest
-                icr_score = (90.0 if icr > 10 else 70.0 if icr > 5 else 45.0 if icr > 2 else 15.0)
+                icr_score = (90.0 if icr > icr_strong else 70.0 if icr > icr_adequate else 45.0 if icr > icr_weak else 15.0)
                 factor_scores["interest_coverage"] = FactorScore(
                     name="Interest Coverage Ratio",
                     value=round(icr, 2),
                     score=icr_score,
-                    interpretation=f"ICR: {icr:.1f}x ({'strong' if icr > 10 else 'adequate' if icr > 3 else 'weak'})",
+                    interpretation=f"ICR: {icr:.1f}x ({'strong' if icr > icr_strong else 'adequate' if icr > icr_adequate else 'weak'})",
                 )
         except Exception:
             pass
 
         # ── New: Asset Turnover ───────────────────────────────────────────
         try:
-            asset_turnover = info.get('assetTurnover') or info.get('totalAssets')
-            # compute from financials if possible
+            at_good = sf.get("asset_turnover_good", 1.0)
+            at_weak = sf.get("asset_turnover_weak", 0.5)
             if inc is not None and not inc.empty and bal is not None and not bal.empty:
                 rev_row = [r for r in inc.index if 'total revenue' in str(r).lower() or 'revenue' in str(r).lower()]
                 ast_row = [r for r in bal.index if 'total assets' in str(r).lower()]
@@ -319,7 +333,7 @@ class FundamentalAgent(BaseAgent):
                     ast = abs(float(bal.loc[ast_row[0]].iloc[0]))
                     if ast > 0:
                         at = rev / ast
-                        at_score = (85.0 if at > 1.0 else 60.0 if at > 0.5 else 40.0)
+                        at_score = (85.0 if at > at_good else 60.0 if at > at_weak else 40.0)
                         factor_scores["asset_turnover"] = FactorScore(
                             name="Asset Turnover",
                             value=round(at, 3),
@@ -331,12 +345,12 @@ class FundamentalAgent(BaseAgent):
 
         # ── New: EPS Surprise (Beat/Miss) ─────────────────────────────────
         try:
-            eps_actual   = info.get('trailingEps')
-            eps_estimate = info.get('forwardEps') or info.get('epsForward')
+            eps_beat = sf.get("eps_surprise_beat", 10)
+            eps_miss = sf.get("eps_surprise_miss", -2)
             eps_surprise_pct = info.get('earningsSurprise') or info.get('earningsQuarterlyGrowth')
             if eps_surprise_pct is not None:
                 eps_surprise_pct = float(eps_surprise_pct) * 100
-                eps_score = (85.0 if eps_surprise_pct > 10 else 60.0 if eps_surprise_pct > 2 else 50.0 if eps_surprise_pct > -2 else 25.0)
+                eps_score = (85.0 if eps_surprise_pct > eps_beat else 60.0 if eps_surprise_pct > 2 else 50.0 if eps_surprise_pct > eps_miss else 25.0)
                 factor_scores["eps_surprise"] = FactorScore(
                     name="EPS Surprise / Growth",
                     value=round(eps_surprise_pct, 2),
@@ -391,7 +405,7 @@ class FundamentalAgent(BaseAgent):
             confidence = min(confidence, 0.40)  # cap if manipulation suspected
 
         # ── Reasoning ─────────────────────────────────────────────────────
-        direction = "BULLISH" if prob_up > 0.55 else "BEARISH" if prob_up < 0.45 else "NEUTRAL"
+        direction = "BULLISH" if prob_up > self.long_threshold else "BEARISH" if prob_up < self.short_threshold else "NEUTRAL"
         reasoning = (
             f"Fundamental outlook is {direction} ({prob_up * 100:.1f}% probability). "
             f"Piotroski F-Score {scores.piotroski_score}/9 ({scores.f_score_interpretation}). "

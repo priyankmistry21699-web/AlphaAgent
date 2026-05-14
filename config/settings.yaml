@@ -9,6 +9,16 @@ data:
   earnings_horizon_days: 30
   backtest_period: 3y
   walk_forward_train_years: 1.0
+  short_period: 5d
+  medium_period: 3mo
+  long_period: 2y
+  vvix_period: 1mo
+  min_rolling_days: 20
+  min_correlation_days: 60
+  min_tail_days: 60
+  min_ath_days: 252
+  min_validation_days: 200
+  min_yoy_months: 13
 technical:
   rsi_window: 14
   bollinger_window: 20
@@ -37,6 +47,14 @@ volatility:
   min_spy_days_for_beta: 30
   vix_elevated: 20
   vix_extreme: 30
+  vvix_extreme: 120
+  vvix_elevated: 90
+  skew_extreme: 140
+  skew_elevated: 130
+  rv_short_window: 10
+  rv_long_window: 30
+  rv_ratio_calm: 0.8
+  rv_ratio_spiking: 1.2
 evt:
   min_observations: 100
   min_tail_events: 10
@@ -74,6 +92,25 @@ fundamental:
   earnings_growth_moderate: 10
   roe_strong: 20
   roe_moderate: 10
+  roa_strong: 15
+  roa_moderate: 8
+  roa_weak: 3
+  operating_margin_strong: 25
+  operating_margin_moderate: 15
+  operating_margin_weak: 5
+  current_ratio_liquid: 2.0
+  current_ratio_adequate: 1.5
+  current_ratio_tight: 1.0
+  interest_coverage_strong: 10
+  interest_coverage_adequate: 5
+  interest_coverage_weak: 2
+  asset_turnover_good: 1.0
+  asset_turnover_weak: 0.5
+  eps_surprise_beat: 10
+  eps_surprise_miss: -2
+  pe_cheap: 15
+  pe_fair: 25
+  pe_expensive: 40
 macro:
   yield_curve_positive: 0.5
   yield_curve_inverted: -0.5
@@ -81,12 +118,27 @@ macro:
   fed_rate_tight: 4.0
   inflation_comfort: 4.0
   recession_prob_low: 0.2
+  recession_prob_cutoff: 0.6
   credit_change_warn: 1.0
   btc_momentum_bull: 20
   btc_momentum_bear: -20
   goldilocks_yield_curve: 1.0
   goldilocks_unemployment: 5.0
   goldilocks_fed_rate: 3.0
+  pmi_expansion: 50
+  pmi_strong: 55
+  pmi_weak: 48
+  claims_low: 220000
+  claims_elevated: 260000
+  claims_high: 350000
+  consumer_sentiment_strong: 90
+  consumer_sentiment_moderate: 70
+  consumer_sentiment_weak: 55
+  tips_breakeven_low: 1.5
+  tips_breakeven_high: 2.5
+  tips_breakeven_danger: 3.0
+  cpi_target: 2.5
+  cpi_elevated: 5.0
 geopolitical:
   credit_deterioration: 1.0
   sector_rotation_formula:
@@ -115,11 +167,41 @@ portfolio:
   beta_divergence_warn: 0.5
   min_cash_reserve_pct: 5.0
   rebalance_min_turnover: 0.05
+risk:
+  liquidity_ratio_high: 1.5
+  liquidity_ratio_low: 0.7
+  drawdown_warning_pct: 30
+  tail_ratio_positive: 1.2
+  tail_ratio_negative: 0.8
+  correlation_delta_threshold: 0.1
+  correlation_min_days: 60
+  correlation_long_days: 252
+backtest:
+  initial_capital: 100000
+  default_hold_days: 5
+  max_position_pct: 0.20
+  transaction_cost_bps: 5.0
+  borrow_cost_annual: 0.0050
+  bid_ask_spread_bps: 2.0
+  kelly_fraction: 0.10
+  lookback_days: 252
+  buffer_days: 30
+cache:
+  price_ttl_seconds: 300
+  info_ttl_seconds: 86400
+  financials_ttl_seconds: 604800
+  options_ttl_seconds: 300
+  insider_ttl_seconds: 3600
+  holders_ttl_seconds: 86400
+  currency_ttl_seconds: 3600
+  news_max_age_days: 7
 rl:
   gamma: 0.99
   learning_rate: 0.0003
 agent_defaults:
   neutral_probability: 0.5
+  long_threshold: 0.55
+  short_threshold: 0.45
   technical_min_confidence: 0.0
   sentiment_base_confidence: 0.3
   currency_base_confidence: 0.3

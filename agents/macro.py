@@ -92,11 +92,12 @@ class MacroAgent(BaseAgent):
 
         # ── 1. Recession Probability ──────────────────────────────────────
         rec_low = sm.get("recession_prob_low", 0.2)
+        rec_cutoff = sm.get("recession_prob_cutoff", 0.6)
         factor_scores["recession_risk"] = FactorScore(
             name="Recession Probability",
             value=result.recession_probability * 100,
             score=(100.0 if result.recession_probability < rec_low
-                   else 0.0 if result.recession_probability > 0.6
+                   else 0.0 if result.recession_probability > rec_cutoff
                    else 50.0),
             interpretation=f"Recession risk: {result.recession_probability * 100:.0f}%",
         )
@@ -133,14 +134,18 @@ class MacroAgent(BaseAgent):
 
         # ── 4. CPI / Inflation ────────────────────────────────────────────
         try:
+            cpi_target = sm.get("cpi_target", 2.5)
+            cpi_comfort = sm.get("inflation_comfort", 4.0)
+            cpi_elevated = sm.get("cpi_elevated", 5.0)
+            min_yoy = settings.get("data.min_yoy_months", 13)
             cpi_series = macro_data.get_series("CPIAUCSL", years_back=2)
-            if len(cpi_series) >= 13:
+            if len(cpi_series) >= min_yoy:
                 cpi_now = float(cpi_series.iloc[-1].iloc[0])
-                cpi_year_ago = float(cpi_series.iloc[-13].iloc[0])
+                cpi_year_ago = float(cpi_series.iloc[-min_yoy].iloc[0])
                 cpi_yoy = (cpi_now / cpi_year_ago - 1) * 100
 
-                cpi_score = (80.0 if cpi_yoy < 2.5
-                             else 50.0 if cpi_yoy < 4.0
+                cpi_score = (80.0 if cpi_yoy < cpi_target
+                             else 50.0 if cpi_yoy < cpi_comfort
                              else 20.0)
                 factor_scores["cpi_inflation"] = FactorScore(
                     name="CPI Inflation (YoY)",
@@ -148,7 +153,7 @@ class MacroAgent(BaseAgent):
                     score=cpi_score,
                     interpretation=f"CPI YoY: {cpi_yoy:.1f}%",
                 )
-                if cpi_yoy > 5.0:
+                if cpi_yoy > cpi_elevated:
                     warnings.append(f"High inflation: CPI {cpi_yoy:.1f}% YoY — Fed tightening risk.")
                     reasoning.append(f"Inflation elevated ({cpi_yoy:.1f}% YoY) — rate hike risk.")
                 elif cpi_yoy < 2.0:
@@ -292,75 +297,87 @@ class MacroAgent(BaseAgent):
 
         # ── 12. ISM PMI Manufacturing (FRED: MANEMP proxy via NAPM) ──────
         try:
+            pmi_expansion = sm.get("pmi_expansion", 50)
+            pmi_strong = sm.get("pmi_strong", 55)
+            pmi_weak = sm.get("pmi_weak", 48)
             pmi_series = macro_data.get_series("NAPM", years_back=1)
             if pmi_series is not None and len(pmi_series) >= 2:
                 pmi_val = float(pmi_series.iloc[-1].iloc[0])
-                pmi_score = (85.0 if pmi_val > 55 else 60.0 if pmi_val > 50 else 35.0 if pmi_val > 45 else 15.0)
+                pmi_score = (85.0 if pmi_val > pmi_strong else 60.0 if pmi_val > pmi_expansion else 35.0 if pmi_val > 45 else 15.0)
                 factor_scores["ism_pmi"] = FactorScore(
                     name="ISM Manufacturing PMI",
                     value=pmi_val,
                     score=pmi_score,
-                    interpretation=f"ISM PMI: {pmi_val:.1f} ({'expansion' if pmi_val > 50 else 'contraction'})",
+                    interpretation=f"ISM PMI: {pmi_val:.1f} ({'expansion' if pmi_val > pmi_expansion else 'contraction'})",
                 )
-                if pmi_val < 48:
+                if pmi_val < pmi_weak:
                     reasoning.append(f"ISM PMI deeply contractionary ({pmi_val:.1f}) — manufacturing recession signal.")
-                elif pmi_val > 55:
+                elif pmi_val > pmi_strong:
                     reasoning.append(f"ISM PMI expansionary ({pmi_val:.1f}) — manufacturing growth strong.")
         except Exception as e:
             reasoning.append(f"ISM PMI unavailable ({e}).")
 
         # ── 13. Consumer Sentiment (FRED: UMCSENT) ────────────────────────
         try:
+            cs_strong = sm.get("consumer_sentiment_strong", 90)
+            cs_moderate = sm.get("consumer_sentiment_moderate", 70)
+            cs_weak = sm.get("consumer_sentiment_weak", 55)
             umcs = macro_data.get_series("UMCSENT", years_back=1)
             if umcs is not None and len(umcs) >= 2:
                 cs_now  = float(umcs.iloc[-1].iloc[0])
                 cs_prev = float(umcs.iloc[-2].iloc[0])
                 cs_change = cs_now - cs_prev
-                cs_score = (80.0 if cs_now > 90 else 60.0 if cs_now > 70 else 40.0 if cs_now > 55 else 20.0)
+                cs_score = (80.0 if cs_now > cs_strong else 60.0 if cs_now > cs_moderate else 40.0 if cs_now > cs_weak else 20.0)
                 factor_scores["consumer_sentiment"] = FactorScore(
                     name="UMich Consumer Sentiment",
                     value=cs_now,
                     score=cs_score,
                     interpretation=f"UMich Sentiment: {cs_now:.1f} ({cs_change:+.1f} MoM)",
                 )
-                if cs_now < 55:
+                if cs_now < cs_weak:
                     reasoning.append(f"Consumer sentiment very weak ({cs_now:.1f}) — demand destruction risk.")
-                elif cs_now > 90:
+                elif cs_now > cs_strong:
                     reasoning.append(f"Consumer sentiment strong ({cs_now:.1f}) — consumption tailwind.")
         except Exception as e:
             reasoning.append(f"Consumer sentiment unavailable ({e}).")
 
         # ── 14. Initial Jobless Claims (FRED: ICSA) ───────────────────────
         try:
+            claims_low = sm.get("claims_low", 220000)
+            claims_elevated = sm.get("claims_elevated", 260000)
+            claims_high = sm.get("claims_high", 350000)
             icsa = macro_data.get_series("ICSA", years_back=1)
             if icsa is not None and len(icsa) >= 4:
                 claims_now = float(icsa.iloc[-1].iloc[0])
                 claims_4wa = float(icsa.iloc[-4:].mean().iloc[0])   # 4-week avg
-                claims_score = (80.0 if claims_now < 220000 else 60.0 if claims_now < 260000 else 35.0 if claims_now < 350000 else 15.0)
+                claims_score = (80.0 if claims_now < claims_low else 60.0 if claims_now < claims_elevated else 35.0 if claims_now < claims_high else 15.0)
                 factor_scores["jobless_claims"] = FactorScore(
                     name="Initial Jobless Claims",
                     value=claims_now,
                     score=claims_score,
                     interpretation=f"Claims: {claims_now/1000:.0f}K (4W avg: {claims_4wa/1000:.0f}K)",
                 )
-                if claims_now > 350000:
+                if claims_now > claims_high:
                     reasoning.append(f"Jobless claims elevated ({claims_now/1000:.0f}K) — labor deterioration.")
         except Exception as e:
             reasoning.append(f"Jobless claims unavailable ({e}).")
 
         # ── 15. 10Y TIPS Breakeven Inflation (FRED: T10YIE) ──────────────
         try:
+            tips_low = sm.get("tips_breakeven_low", 1.5)
+            tips_high = sm.get("tips_breakeven_high", 2.5)
+            tips_danger = sm.get("tips_breakeven_danger", 3.0)
             tips = macro_data.get_series("T10YIE", years_back=1)
             if tips is not None and len(tips) >= 2:
                 tips_val = float(tips.iloc[-1].iloc[0])
-                tips_score = (70.0 if 1.5 < tips_val < 2.5 else 50.0 if 1.0 < tips_val <= 1.5 else 30.0 if tips_val > 3.0 else 40.0)
+                tips_score = (70.0 if tips_low < tips_val < tips_high else 50.0 if 1.0 < tips_val <= tips_low else 30.0 if tips_val > tips_danger else 40.0)
                 factor_scores["tips_breakeven"] = FactorScore(
                     name="10Y TIPS Breakeven Inflation",
                     value=tips_val,
                     score=tips_score,
-                    interpretation=f"Breakeven: {tips_val:.2f}% ({'anchored' if 1.5 < tips_val < 2.5 else 'elevated' if tips_val > 2.5 else 'deflation risk'})",
+                    interpretation=f"Breakeven: {tips_val:.2f}% ({'anchored' if tips_low < tips_val < tips_high else 'elevated' if tips_val > tips_high else 'deflation risk'})",
                 )
-                if tips_val > 3.0:
+                if tips_val > tips_danger:
                     reasoning.append(f"TIPS breakeven {tips_val:.2f}% — market pricing in persistent inflation.")
         except Exception as e:
             reasoning.append(f"TIPS breakeven unavailable ({e}).")
@@ -382,7 +399,7 @@ class MacroAgent(BaseAgent):
         prob_up = max(0.01, min(0.99, prob_up))
         confidence = max(0.0, min(1.0, confidence))
 
-        direction = "BULLISH" if prob_up > 0.55 else "BEARISH" if prob_up < 0.45 else "NEUTRAL"
+        direction = "BULLISH" if prob_up > self.long_threshold else "BEARISH" if prob_up < self.short_threshold else "NEUTRAL"
         summary = (
             f"Macroeconomic environment is {result.regime} ({direction}). "
             f"Recession probability: {result.recession_probability * 100:.0f}%. "

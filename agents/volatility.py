@@ -159,7 +159,10 @@ class VolatilityAgent(BaseAgent):
         # ── New: VVIX (Vol of Vol) ────────────────────────────────────────
         try:
             import yfinance as yf
-            vvix_df = yf.download("^VVIX", period="1mo", interval="1d", auto_adjust=True, progress=False)
+            vvix_extreme = sv.get("vvix_extreme", 120)
+            vvix_elevated = sv.get("vvix_elevated", 90)
+            vvix_period = settings.get("data.vvix_period", "1mo")
+            vvix_df = yf.download("^VVIX", period=vvix_period, interval="1d", auto_adjust=True, progress=False)
             if not vvix_df.empty:
                 vvix_val = float(vvix_df["Close"].squeeze().iloc[-1])
                 vvix_score = max(10.0, min(90.0, 100.0 - (vvix_val - 60) * 1.5))
@@ -167,9 +170,9 @@ class VolatilityAgent(BaseAgent):
                     name="VVIX (Vol of Vol Index)",
                     value=round(vvix_val, 1),
                     score=vvix_score,
-                    interpretation=f"VVIX: {vvix_val:.1f} ({'extreme uncertainty' if vvix_val > 120 else 'elevated' if vvix_val > 90 else 'normal'})",
+                    interpretation=f"VVIX: {vvix_val:.1f} ({'extreme uncertainty' if vvix_val > vvix_extreme else 'elevated' if vvix_val > vvix_elevated else 'normal'})",
                 )
-                if vvix_val > 120:
+                if vvix_val > vvix_extreme:
                     reasoning.append(f"VVIX {vvix_val:.1f} — extreme vol-of-vol: options market pricing in major move.")
         except Exception:
             pass
@@ -177,8 +180,9 @@ class VolatilityAgent(BaseAgent):
         # ── New: VIX Term Structure (VIX3M - VIX contango/backwardation) ─
         try:
             import yfinance as yf
-            vix3m_df = yf.download("^VIX3M", period="5d", interval="1d", auto_adjust=True, progress=False)
-            vix_df   = yf.download("^VIX",   period="5d", interval="1d", auto_adjust=True, progress=False)
+            short_period = settings.get("data.short_period", "5d")
+            vix3m_df = yf.download("^VIX3M", period=short_period, interval="1d", auto_adjust=True, progress=False)
+            vix_df   = yf.download("^VIX",   period=short_period, interval="1d", auto_adjust=True, progress=False)
             if not vix3m_df.empty and not vix_df.empty:
                 vix3m = float(vix3m_df["Close"].squeeze().iloc[-1])
                 vix_spot = float(vix_df["Close"].squeeze().iloc[-1])
@@ -197,16 +201,20 @@ class VolatilityAgent(BaseAgent):
 
         # ── New: Realized Vol Trend (10d vs 30d) ─────────────────────────
         try:
-            if returns is not None and len(returns) >= 30:
-                rv10 = float(returns.iloc[-10:].std() * (252**0.5) * 100)
-                rv30 = float(returns.iloc[-30:].std() * (252**0.5) * 100)
-                rv_ratio = rv10 / rv30 if rv30 > 0 else 1.0
-                rvt_score = (70.0 if rv_ratio < 0.8 else 50.0 if rv_ratio < 1.2 else 25.0)
+            rv_short = sv.get("rv_short_window", 10)
+            rv_long = sv.get("rv_long_window", 30)
+            rv_calm = sv.get("rv_ratio_calm", 0.8)
+            rv_spiking = sv.get("rv_ratio_spiking", 1.2)
+            if returns is not None and len(returns) >= rv_long:
+                rv_short_val = float(returns.iloc[-rv_short:].std() * (252**0.5) * 100)
+                rv_long_val = float(returns.iloc[-rv_long:].std() * (252**0.5) * 100)
+                rv_ratio = rv_short_val / rv_long_val if rv_long_val > 0 else 1.0
+                rvt_score = (70.0 if rv_ratio < rv_calm else 50.0 if rv_ratio < rv_spiking else 25.0)
                 factor_scores["realized_vol_trend"] = FactorScore(
-                    name="Realized Vol Trend (10d/30d)",
+                    name=f"Realized Vol Trend ({rv_short}d/{rv_long}d)",
                     value=round(rv_ratio, 3),
                     score=rvt_score,
-                    interpretation=f"10d RV {rv10:.1f}% vs 30d RV {rv30:.1f}% (ratio {rv_ratio:.2f}) — {'calming' if rv_ratio < 0.8 else 'spiking' if rv_ratio > 1.3 else 'stable'}",
+                    interpretation=f"{rv_short}d RV {rv_short_val:.1f}% vs {rv_long}d RV {rv_long_val:.1f}% (ratio {rv_ratio:.2f}) — {'calming' if rv_ratio < rv_calm else 'spiking' if rv_ratio > rv_spiking else 'stable'}",
                 )
         except Exception:
             pass
@@ -214,15 +222,17 @@ class VolatilityAgent(BaseAgent):
         # ── New: SKEW Index (Tail Risk Premium) ──────────────────────────
         try:
             import yfinance as yf
-            skew_df = yf.download("^SKEW", period="5d", interval="1d", auto_adjust=True, progress=False)
+            skew_extreme = sv.get("skew_extreme", 140)
+            skew_elevated = sv.get("skew_elevated", 130)
+            skew_df = yf.download("^SKEW", period=short_period, interval="1d", auto_adjust=True, progress=False)
             if not skew_df.empty:
                 skew_val = float(skew_df["Close"].squeeze().iloc[-1])
-                skew_score = max(10.0, min(90.0, 130.0 - skew_val))
+                skew_score = max(10.0, min(90.0, skew_elevated - skew_val))
                 factor_scores["skew_index"] = FactorScore(
                     name="CBOE SKEW Index",
                     value=round(skew_val, 1),
                     score=skew_score,
-                    interpretation=f"SKEW: {skew_val:.1f} ({'high tail risk' if skew_val > 140 else 'elevated' if skew_val > 130 else 'normal'})",
+                    interpretation=f"SKEW: {skew_val:.1f} ({'high tail risk' if skew_val > skew_extreme else 'elevated' if skew_val > skew_elevated else 'normal'})",
                 )
         except Exception:
             pass
@@ -231,8 +241,8 @@ class VolatilityAgent(BaseAgent):
         prob_up = max(0.01, min(0.99, prob_up))
         confidence = max(0.0, min(1.0, confidence))
 
-        vote = (Direction.LONG if prob_up > 0.55
-                else Direction.SHORT if prob_up < 0.45
+        vote = (Direction.LONG if prob_up > self.long_threshold
+                else Direction.SHORT if prob_up < self.short_threshold
                 else Direction.HOLD)
 
         return AgentResult(

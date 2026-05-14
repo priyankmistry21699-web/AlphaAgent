@@ -31,15 +31,18 @@ import numpy as np
 import pandas as pd
 
 from backtest.metrics import PerformanceMetrics, compute_metrics
+from config.settings_manager import settings as _settings
 
 logger = logging.getLogger(__name__)
 
-LOOKBACK_DAYS = 252
-MIN_HISTORY = LOOKBACK_DAYS + 30
+def _bs() -> dict:
+    return _settings.get_section("backtest")
 
-# Short borrow cost: 50 bps / year → per 5-day hold
-_BORROW_COST_ANN = 0.0050
-_BID_ASK_BPS = 2.0           # additional 2 bps round-trip for market impact
+LOOKBACK_DAYS = _settings.get("backtest.lookback_days", 252)
+MIN_HISTORY = LOOKBACK_DAYS + _settings.get("backtest.buffer_days", 30)
+
+_BORROW_COST_ANN = _settings.get("backtest.borrow_cost_annual", 0.0050)
+_BID_ASK_BPS = _settings.get("backtest.bid_ask_spread_bps", 2.0)
 
 
 @dataclass
@@ -74,13 +77,26 @@ class BacktestEngine:
 
     def __init__(
         self,
-        initial_capital: float = 100_000.0,
-        hold_days: int = 5,
-        max_position_pct: float = 0.20,
-        transaction_cost_bps: float = 5.0,
-        borrow_cost_ann: float = _BORROW_COST_ANN,
-        bid_ask_bps: float = _BID_ASK_BPS,
+        initial_capital: float = None,
+        hold_days: int = None,
+        max_position_pct: float = None,
+        transaction_cost_bps: float = None,
+        borrow_cost_ann: float = None,
+        bid_ask_bps: float = None,
     ):
+        bs = _bs()
+        if initial_capital is None:
+            initial_capital = float(bs.get("initial_capital", 100_000.0))
+        if hold_days is None:
+            hold_days = int(bs.get("default_hold_days", 5))
+        if max_position_pct is None:
+            max_position_pct = float(bs.get("max_position_pct", 0.20))
+        if transaction_cost_bps is None:
+            transaction_cost_bps = float(bs.get("transaction_cost_bps", 5.0))
+        if borrow_cost_ann is None:
+            borrow_cost_ann = float(bs.get("borrow_cost_annual", _BORROW_COST_ANN))
+        if bid_ask_bps is None:
+            bid_ask_bps = float(bs.get("bid_ask_spread_bps", _BID_ASK_BPS))
         self.initial_capital = initial_capital
         self.hold_days = hold_days
         self.max_position_pct = max_position_pct
@@ -135,9 +151,11 @@ class BacktestEngine:
 
             prob, regime, kelly_frac = self._compute_signal(window_prices, window_returns)
 
-            if prob > 0.55:
+            long_thr = _settings.get("agent_defaults.long_threshold", 0.55)
+            short_thr = _settings.get("agent_defaults.short_threshold", 0.45)
+            if prob > long_thr:
                 direction = "LONG"
-            elif prob < 0.45:
+            elif prob < short_thr:
                 direction = "SHORT"
             else:
                 direction = "HOLD"

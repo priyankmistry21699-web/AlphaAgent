@@ -26,6 +26,16 @@ class BaseAgent(ABC):
     
     # Define the name of the agent in the subclass (e.g., "technical")
     name: str = "base"
+
+    @property
+    def long_threshold(self) -> float:
+        from config.settings_manager import settings
+        return settings.get("agent_defaults.long_threshold", 0.55)
+
+    @property
+    def short_threshold(self) -> float:
+        from config.settings_manager import settings
+        return settings.get("agent_defaults.short_threshold", 0.45)
     
     def analyze(self, ticker: str, data: Any, **kwargs) -> AgentResult:
         """

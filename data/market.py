@@ -42,13 +42,34 @@ class MarketData:
         >>> returns = md.get_returns()
     """
     
-    # Cache TTLs (seconds)
-    OHLCV_TTL = 300             # 5 minutes (near-real-time)
-    INFO_TTL = 86400             # 24 hours
-    FINANCIALS_TTL = 604800      # 7 days
-    OPTIONS_TTL = 300            # 5 minutes
-    INSIDER_TTL = 3600           # 1 hour (SEC filings can hit anytime)
-    HOLDERS_TTL = 86400          # 24 hours
+    @staticmethod
+    def _cache_cfg() -> dict:
+        from config.settings_manager import settings
+        return settings.get_section("cache")
+
+    @property
+    def OHLCV_TTL(self):
+        return self._cache_cfg().get("price_ttl_seconds", 300)
+
+    @property
+    def INFO_TTL(self):
+        return self._cache_cfg().get("info_ttl_seconds", 86400)
+
+    @property
+    def FINANCIALS_TTL(self):
+        return self._cache_cfg().get("financials_ttl_seconds", 604800)
+
+    @property
+    def OPTIONS_TTL(self):
+        return self._cache_cfg().get("options_ttl_seconds", 300)
+
+    @property
+    def INSIDER_TTL(self):
+        return self._cache_cfg().get("insider_ttl_seconds", 3600)
+
+    @property
+    def HOLDERS_TTL(self):
+        return self._cache_cfg().get("holders_ttl_seconds", 86400)
     
     def __init__(self, ticker: str, cache: Optional[DataCache] = None):
         self.ticker = ticker.upper()

@@ -318,8 +318,8 @@ REASON: [A strict 2-sentence explanation focusing on behavioral economics and se
         prob_up = max(0.01, min(0.99, prob_up))
         confidence = max(0.0, min(1.0, confidence))
 
-        vote = (Direction.LONG if prob_up > 0.55
-                else Direction.SHORT if prob_up < 0.45
+        vote = (Direction.LONG if prob_up > self.long_threshold
+                else Direction.SHORT if prob_up < self.short_threshold
                 else Direction.HOLD)
 
         return AgentResult(

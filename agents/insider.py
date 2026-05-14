@@ -179,7 +179,7 @@ class InsiderAgent(BaseAgent):
         confidence = min(1.0, max(0.0, confidence))
 
         # ── 5. Reasoning ──────────────────────────────────────────────────
-        direction = "BULLISH" if prob_up > 0.55 else "BEARISH" if prob_up < 0.45 else "NEUTRAL"
+        direction = "BULLISH" if prob_up > self.long_threshold else "BEARISH" if prob_up < self.short_threshold else "NEUTRAL"
         reasoning = (
             f"Insider & Whale outlook is {direction} ({prob_up * 100:.1f}% probability). "
             f"Institutions hold {result.institutional_ownership_pct:.1f}% of shares. "

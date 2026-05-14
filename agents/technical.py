@@ -277,7 +277,7 @@ class TechnicalAgent(BaseAgent):
         confidence = min(max(confidence, 0.0), 1.0)
 
         # ── 8. Reasoning ─────────────────────────────────────────────────
-        direction = "BULLISH" if prob_up > 0.55 else "BEARISH" if prob_up < 0.45 else "NEUTRAL"
+        direction = "BULLISH" if prob_up > self.long_threshold else "BEARISH" if prob_up < self.short_threshold else "NEUTRAL"
         reasoning = (
             f"Technical outlook is {direction} ({prob_up * 100:.1f}% probability). "
             f"Price ${indicators.current_price:.2f}. "
