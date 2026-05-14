@@ -881,6 +881,127 @@ async def get_signal(ticker: str):
         Monitor.record_request(0, success=False)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/v1/chat")
+async def signal_chat(body: dict):
+    """
+    AI chat endpoint for the Signal tab chatbot.
+    Accepts user question + signal context, returns Claude's answer.
+    Body: { "question": str, "ticker": str, "signal_context": dict }
+    """
+    import os
+    question = (body.get("question") or "").strip()
+    ticker   = (body.get("ticker") or "").upper()
+    ctx      = body.get("signal_context") or {}
+
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    # ── Build system prompt from signal context ─────────────────────────────
+    direction  = ctx.get("direction", "NEUTRAL")
+    prob       = ctx.get("probability", 0.5)
+    conviction = ctx.get("conviction", 0)
+    entropy    = ctx.get("entropy", 0)
+    multiplier = ctx.get("multiplier", 1.0)
+    warnings   = ctx.get("warnings") or []
+    agents_raw = ctx.get("agents") or []
+    summary    = ctx.get("summary") or {}
+    holding    = ctx.get("holding_period") or {}
+
+    agent_lines = []
+    for a in agents_raw:
+        if not isinstance(a, dict):
+            try: a = a.__dict__
+            except Exception: continue
+        name  = a.get("agent_name") or a.get("name", "?")
+        vote  = a.get("vote", "HOLD")
+        p_up  = a.get("probability_up", 0.5)
+        rsn   = (a.get("reasoning") or "")[:180]
+        factors = a.get("factor_scores") or {}
+        if isinstance(factors, dict):
+            top = sorted(
+                [(k, v) for k, v in factors.items() if isinstance(v, dict)],
+                key=lambda x: x[1].get("score", 50), reverse=True
+            )[:2]
+            fstr = " | ".join(
+                f"{v.get('name', k)}: {v.get('score', 0):.0f}/100 ({v.get('interpretation','')[:50]})"
+                for k, v in top
+            )
+        else:
+            fstr = ""
+        line = f"  • {name}: {vote} ({p_up*100:.0f}%) — {rsn}"
+        if fstr:
+            line += f"\n    Best factors: {fstr}"
+        agent_lines.append(line)
+
+    bull   = summary.get("bull_case") or []
+    bear   = summary.get("bear_case") or []
+    entry  = summary.get("entry_notes") or []
+    risk_n = summary.get("risk_notes") or []
+    hl     = summary.get("half_life_days") or holding.get("half_life_days", 0)
+    hmin   = holding.get("optimal_hold_min", "?")
+    hmax   = holding.get("optimal_hold_max", "?")
+
+    system_prompt = f"""You are AlphaAgent AI — an expert quantitative trading assistant embedded in AlphaAgent, a 9-agent quantitative trading system. A deep analysis of {ticker} has just been completed. Answer the user's questions using ONLY the data below. Be concise (≤200 words unless the user asks for detail), accurate, and use plain English.
+
+═══ SIGNAL SNAPSHOT — {ticker} ═══
+Direction:       {direction}
+Probability Up:  {prob*100:.1f}%
+Conviction:      {conviction:.1f}%
+Position Size:   {multiplier:.2f}x (Kelly-sized)
+Signal Entropy:  {entropy:.3f} ({'agents strongly disagree — high uncertainty' if entropy > 0.8 else 'agents reasonably aligned'})
+Headline:        {summary.get('headline', 'N/A')}
+Recommended:     {summary.get('action', 'N/A')}
+
+═══ HOLDING PERIOD ═══
+Optimal Hold:    {hmin}–{hmax} days
+Half-Life:       {hl:.1f}d {'(mean-reverting signal — exit by expiry date)' if hl and hl > 0 else '(trending — no fixed expiry, use trailing stop)'}
+
+═══ 9-AGENT VOTES ═══
+{chr(10).join(agent_lines) or '  (no agent data)'}
+
+═══ BULL CASE ═══
+{chr(10).join(f'  + {b}' for b in bull) or '  (no strong bull factors)'}
+
+═══ BEAR CASE ═══
+{chr(10).join(f'  - {b}' for b in bear) or '  (no strong bear factors)'}
+
+═══ ENTRY NOTES ═══
+{chr(10).join(f'  → {e}' for e in entry) or '  (check intraday chart before entry)'}
+
+═══ RISK NOTES ═══
+{chr(10).join(f'  ⚠ {r}' for r in risk_n) or '  (no critical risk flags)'}
+
+═══ ACTIVE WARNINGS ═══
+{chr(10).join(f'  !! {w}' for w in warnings) or '  None'}
+
+RULES: Answer only from this context. Do not invent numbers. If entropy > 0.8, note that agents strongly disagree. Use bullet points when listing multiple items. Keep answers ≤200 words unless the user explicitly asks for more detail."""
+
+    # ── Call Claude ────────────────────────────────────────────────────────────
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"answer": (
+            f"AI assistant is offline — ANTHROPIC_API_KEY not set. "
+            f"Signal summary: {ticker} is **{direction}** with {prob*100:.1f}% probability up "
+            f"and {conviction:.1f}% conviction. "
+            f"Recommended: {summary.get('action', 'N/A')}"
+        )}
+
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=system_prompt,
+            messages=[{"role": "user", "content": question}],
+        )
+        answer = msg.content[0].text if msg.content else "No response generated."
+        return {"answer": answer, "ticker": ticker}
+    except Exception as e:
+        logger.error(f"Chat API error: {e}")
+        raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
+
+
 @app.get("/api/v1/metrics")
 async def get_metrics():
     """Returns real-time telemetry for the dashboard."""
