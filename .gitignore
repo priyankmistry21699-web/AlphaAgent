@@ -1,0 +1,53 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual environments
+venv/
+env/
+.venv/
+ENV/
+
+# Database files (runtime state)
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Environment & secrets
+.env
+.env.*
+*.key
+secrets.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+desktop.ini

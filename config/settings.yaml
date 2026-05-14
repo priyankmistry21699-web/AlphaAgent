@@ -1,0 +1,150 @@
+data:
+  technical_period: 1y
+  risk_period: 5d
+  macro_btc_period: 3mo
+  currency_dxy_period: 6mo
+  currency_pair_period: 5d
+  alternative_period: 1y
+  portfolio_lookback: 1y
+  earnings_horizon_days: 30
+  backtest_period: 3y
+  walk_forward_train_years: 1.0
+technical:
+  rsi_window: 14
+  bollinger_window: 20
+  bollinger_std: 2.0
+  adx_window: 14
+  atr_window: 14
+  stoch_window: 14
+  stoch_smooth: 3
+  momentum_lookback: 22
+  min_data_days: 50
+  min_momentum_days: 100
+  leaderboard_window: 20
+simulation:
+  num_paths: 5000
+  ci_level_1: 0.68
+  ci_level_2: 0.95
+  ci_level_3: 0.99
+volatility:
+  regime_low_pct: 25
+  regime_normal_pct: 75
+  regime_high_pct: 95
+  put_call_bearish: 0.7
+  put_call_overbought: 1.2
+  iv_rv_underpriced: 0.7
+  iv_rv_overpriced: 1.5
+  min_spy_days_for_beta: 30
+  vix_elevated: 20
+  vix_extreme: 30
+evt:
+  min_observations: 100
+  min_tail_events: 10
+  block_size: 21
+  threshold_percentile: 0.1
+  var_level_1: 0.95
+  var_level_2: 0.99
+hawkes:
+  min_events: 10
+  branching_warn: 0.8
+  branching_critical: 0.95
+kelly:
+  half_kelly_fraction: 0.5
+  max_kelly_cap: 0.25
+fundamental:
+  altman_z_quality: 3.0
+  debt_to_equity_max: 3.0
+  pb_undervalued: 1.5
+  pb_fair: 3.0
+  peg_undervalued: 1.0
+  peg_fair: 2.0
+  ev_ebitda_cheap: 10
+  ev_ebitda_fair: 20
+  ev_ebitda_expensive: 30
+  ps_cheap: 2.0
+  ps_fair: 4.0
+  fcf_yield_good: 2.0
+  fcf_yield_great: 5.0
+  dcf_upside_strong: 30
+  dcf_upside_moderate: 10
+  dcf_downside_limit: -20
+  revenue_growth_strong: 20
+  revenue_growth_moderate: 10
+  earnings_growth_strong: 20
+  earnings_growth_moderate: 10
+  roe_strong: 20
+  roe_moderate: 10
+macro:
+  yield_curve_positive: 0.5
+  yield_curve_inverted: -0.5
+  fed_rate_easy: 2.0
+  fed_rate_tight: 4.0
+  inflation_comfort: 4.0
+  recession_prob_low: 0.2
+  credit_change_warn: 1.0
+  btc_momentum_bull: 20
+  btc_momentum_bear: -20
+  goldilocks_yield_curve: 1.0
+  goldilocks_unemployment: 5.0
+  goldilocks_fed_rate: 3.0
+geopolitical:
+  credit_deterioration: 1.0
+  sector_rotation_formula:
+    xlk_weight: 1.5
+    xle_weight: -1.0
+    xlf_weight: -0.5
+currency:
+  eurusd_strong: 1.05
+  eurusd_weak: 0.95
+  usdjpy_strong: 140
+  usdjpy_weak: 120
+  usdcny_stress: 7.3
+  fx_impact_multiplier: 0.3
+  sector_fx_exposure:
+    materials: 0.5
+    technology: 0.15
+    financials: 0.3
+    real_estate: 0.1
+    utilities: 0.1
+portfolio:
+  max_single_position_pct: 30.0
+  min_single_position_pct: 2.0
+  max_sector_pct: 40.0
+  high_correlation_warn: 0.7
+  high_volatility_warn: 30.0
+  beta_divergence_warn: 0.5
+  min_cash_reserve_pct: 5.0
+  rebalance_min_turnover: 0.05
+rl:
+  gamma: 0.99
+  learning_rate: 0.0003
+agent_defaults:
+  neutral_probability: 0.5
+  technical_min_confidence: 0.0
+  sentiment_base_confidence: 0.3
+  currency_base_confidence: 0.3
+  geopolitical_base_confidence: 0.35
+  macro_base_confidence: 0.5
+  insider_base_confidence: 0.5
+  rag_high_confidence: 0.8
+  short_interest_high: 20.0
+  analyst_bullish_consensus: 0.7
+calibration:
+  rolling_window: 20
+  min_trades_for_calibration: 10
+infrastructure:
+  server_host: 127.0.0.1
+  server_port: 8000
+  cache_ttl_seconds: 3600
+  news_fetch_limit: 30
+  market_symbols:
+    S&P 500: ^GSPC
+    NASDAQ: ^IXIC
+    Dow Jones: ^DJI
+    Russell 2000: ^RUT
+    VIX: ^VIX
+    Gold: GLD
+    Bitcoin: BTC-USD
+    20Y Treasury: TLT
+    USD Index: UUP
+    Crude Oil: USO

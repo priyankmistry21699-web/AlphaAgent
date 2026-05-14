@@ -1,0 +1,86 @@
+# AlphaAgent — Centralized Threshold Configuration
+#
+# All hard-coded risk limits, signal bands, and scoring cutoffs live here.
+# Change a value once; it takes effect everywhere.
+
+# ── Risk Agent Circuit Breakers ───────────────────────────────────────────────
+risk:
+  black_swan_sigma: 5.0           # |Z-score| threshold for BLACK_SWAN override
+  flash_crash_ticker_pct: -7.0    # Single-day ticker drop → HALT
+  flash_crash_spy_pct: -5.0       # Single-day SPY drop → HALT
+  geo_shock_vix: 35.0             # VIX level for GEO_SHOCK trigger
+  geo_shock_gold_pct: 2.0         # Gold 1-day gain % (alongside VIX) → GEO_SHOCK
+  geo_shock_oil_pct: 5.0          # Oil 1-day gain % (alongside VIX) → GEO_SHOCK
+  carry_unwind_usdjpy: 125.0      # USD/JPY level below which → CARRY_UNWIND
+  carry_unwind_jpy_drop_pct: -1.5 # 1-day JPY surge % (negative = JPY strengthens)
+  garch_extreme_var99: -0.05      # EVT 99% VaR threshold for CRITICAL RISK
+  garch_high_var95: -0.03         # EVT 95% VaR threshold for HIGH RISK
+
+# ── Kelly Criterion Caps ──────────────────────────────────────────────────────
+kelly:
+  full_kelly_cap: 0.30            # Hard cap: full Kelly never exceeds 30%
+  half_kelly_cap: 0.15            # Hard cap: half Kelly never exceeds 15%
+  vol_adjusted_cap: 0.15          # Hard cap: vol-adjusted never exceeds 15%
+  high_vol_threshold: 0.03        # Daily vol > 3% triggers vol-adjustment
+
+# ── Volatility Agent ──────────────────────────────────────────────────────────
+volatility:
+  put_call_bearish_threshold: 1.2
+  put_call_bullish_threshold: 0.7
+  iv_rv_expensive_threshold: 1.5  # IV/RV > this → IV expensive (slight bullish)
+  iv_rv_cheap_threshold: 0.7      # IV/RV < this → IV cheap (vol expansion expected)
+  garch_low_prob_boost: 0.10      # P(up) adjustment for LOW vol regime
+  garch_high_prob_drag: -0.15     # P(up) adjustment for HIGH vol regime
+  garch_extreme_prob_drag: -0.20  # P(up) adjustment for EXTREME vol regime
+
+# ── Orchestrator / Bayesian Fusion ───────────────────────────────────────────
+orchestrator:
+  direction_long_threshold: 0.55  # Posterior > this → LONG
+  direction_short_threshold: 0.45 # Posterior < this → SHORT
+  entropy_warning_threshold: 0.90 # Entropy > this → "Agents disagree" warning
+  max_agent_workers: 9            # ThreadPoolExecutor max_workers
+
+# ── GARCH / Vol Regime ────────────────────────────────────────────────────────
+garch:
+  regime_low_percentile: 25       # < 25th pctl → LOW regime
+  regime_normal_percentile: 75    # 25–75th pctl → NORMAL regime
+  regime_high_percentile: 95      # 75–95th pctl → HIGH regime
+                                  # > 95th pctl → EXTREME regime
+
+# ── Backtest Engine ───────────────────────────────────────────────────────────
+backtest:
+  lookback_days: 252
+  min_history_days: 282
+  transaction_cost_bps: 5
+  initial_capital: 100000
+  hold_days: 5
+  max_position_pct: 0.20
+  long_threshold: 0.55            # Prob > this → LONG signal
+  short_threshold: 0.45           # Prob < this → SHORT signal
+
+# ── Portfolio Agent ───────────────────────────────────────────────────────────
+portfolio:
+  max_single_position_pct: 30.0
+  min_single_position_pct: 2.0
+  high_concentration_hhi: 0.25    # HHI > this → "concentrated" warning
+  high_correlation_threshold: 0.70
+  high_vol_threshold_pct: 30.0    # Portfolio ann vol > this → warning
+
+# ── Fundamental / Scoring ─────────────────────────────────────────────────────
+fundamental:
+  piotroski_weak_threshold: 3     # F-Score <= 3 → weak
+  piotroski_strong_threshold: 6   # F-Score >= 6 → strong
+  altman_z_safe: 2.99             # Z-Score > this → safe zone
+  altman_z_distress: 1.81         # Z-Score < this → distress zone
+  beneish_m_threshold: -1.78      # M-Score > this → possible manipulation
+  dcf_wacc: 0.10                  # 10% discount rate for DCF
+  dcf_terminal_growth: 0.03       # 3% Gordon-model terminal growth
+  dcf_max_growth: 0.30            # Cap on high-growth phase rate
+  dcf_min_growth: -0.15           # Floor on declining earnings rate
+
+# ── Geopolitical Agent ────────────────────────────────────────────────────────
+geopolitical:
+  override_score_threshold: 25.0  # Avg score < this → GEOPOLITICAL OVERRIDE
+  position_cap_multiplier: 0.35   # Override caps position size at 35%
+  vix_extreme_threshold: 30.0
+  vix_elevated_threshold: 20.0

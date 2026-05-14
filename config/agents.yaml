@@ -1,0 +1,50 @@
+agents:
+  technical:
+    enabled: true
+    weight: 0.20
+  fundamental:
+    enabled: true
+    weight: 0.25
+  sentiment:
+    enabled: true
+    weight: 0.12
+  macro:
+    enabled: true
+    weight: 0.20
+  insider:
+    enabled: true
+    weight: 0.10
+  volatility:
+    enabled: true
+    weight: 0.10
+  risk:
+    enabled: true
+    weight: 0.0       # Risk agent is a circuit breaker, not a voter
+  geopolitical:
+    enabled: true
+    weight: 0.08
+  currency:
+    enabled: true
+    weight: 0.05
+
+regime_weights:
+  crisis:
+    technical: 0.05
+    fundamental: 0.10
+    sentiment: 0.05
+    macro: 0.35
+    insider: 0.05
+    volatility: 0.18
+    risk: 0.0
+    geopolitical: 0.17
+    currency: 0.05
+  expansion:
+    technical: 0.22
+    fundamental: 0.28
+    sentiment: 0.12
+    macro: 0.15
+    insider: 0.10
+    volatility: 0.08
+    risk: 0.0
+    geopolitical: 0.03
+    currency: 0.02
