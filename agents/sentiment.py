@@ -314,6 +314,153 @@ REASON: [A strict 2-sentence explanation focusing on behavioral economics and se
         except Exception:
             pass
 
+        # ── New: Transfer Entropy Proxy (News → Price Causality) ─────────
+        # Approximation: Granger-style test — does lagged news volume predict returns?
+        try:
+            import numpy as _np
+            tkr_obj_te = yf.Ticker(ticker)
+            news_items  = tkr_obj_te.news or []
+            hist_te = tkr_obj_te.history(period="3mo", interval="1d")
+            if not hist_te.empty and len(news_items) >= 5:
+                import pandas as pd
+                # Build daily news count series
+                import time as _time
+                today_ts = int(_time.time())
+                daily_counts = {}
+                for n in news_items:
+                    ts = n.get("providerPublishTime", 0)
+                    day_key = pd.Timestamp(ts, unit="s").normalize()
+                    daily_counts[day_key] = daily_counts.get(day_key, 0) + 1
+
+                news_ser = pd.Series(daily_counts).reindex(hist_te.index, fill_value=0)
+                rets_ser = hist_te["Close"].pct_change().dropna()
+                news_ser = news_ser.reindex(rets_ser.index, fill_value=0)
+
+                if len(rets_ser) >= 20:
+                    # Lag-1 cross-correlation: does yesterday's news predict today's return?
+                    lagged_news = news_ser.shift(1).dropna()
+                    aligned_ret = rets_ser.reindex(lagged_news.index).dropna()
+                    lagged_news = lagged_news.reindex(aligned_ret.index)
+
+                    if len(aligned_ret) >= 15 and lagged_news.std() > 0:
+                        corr = float(aligned_ret.corr(lagged_news))
+                        te_score = max(10.0, min(90.0, 50.0 + corr * 40.0))
+                        factor_scores["transfer_entropy_proxy"] = FactorScore(
+                            name="Transfer Entropy (News→Price)",
+                            value=round(corr, 3),
+                            score=te_score,
+                            interpretation=(
+                                f"Lag-1 news-return corr: {corr:+.3f} "
+                                f"({'news reliably leads price' if abs(corr) > 0.3 else 'weak causal link' if abs(corr) > 0.1 else 'no detectable causality'})"
+                            ),
+                        )
+                        if corr > 0.3:
+                            reasoning.append(f"Transfer entropy: news flow significantly leads price ({corr:+.2f} corr) — sentiment is causal.")
+        except Exception:
+            pass
+
+        # ── New: Shannon Entropy of Factor Scores (Signal Clarity) ────────
+        try:
+            import numpy as _np
+            if len(factor_scores) >= 3:
+                scores = _np.array([fs.score for fs in factor_scores.values()]) / 100.0
+                scores = _np.clip(scores, 1e-9, 1.0 - 1e-9)
+                # Normalize to probability distribution
+                scores_n = scores / scores.sum()
+                shannon_h = float(-_np.sum(scores_n * _np.log(scores_n)))
+                max_entropy = _np.log(len(scores_n))
+                norm_entropy = shannon_h / max_entropy if max_entropy > 0 else 0.5
+                # Low entropy = agents agree (high clarity); high entropy = dispersed signals
+                entropy_score = max(10.0, min(90.0, (1.0 - norm_entropy) * 80.0 + 10.0))
+                factor_scores["signal_entropy"] = FactorScore(
+                    name="Signal Entropy (Clarity Index)",
+                    value=round(norm_entropy, 3),
+                    score=entropy_score,
+                    interpretation=(
+                        f"Normalized Shannon entropy: {norm_entropy:.3f} "
+                        f"({'high clarity — signals aligned' if norm_entropy < 0.7 else 'mixed signals' if norm_entropy < 0.9 else 'maximum disagreement'})"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Price Target vs Current Price ────────────────────────────
+        try:
+            info_obj = yf.Ticker(ticker).info
+            target_mean = info_obj.get("targetMeanPrice")
+            current_p   = info_obj.get("currentPrice") or info_obj.get("regularMarketPrice")
+            if target_mean and current_p and float(current_p) > 0:
+                upside_pct = (float(target_mean) - float(current_p)) / float(current_p) * 100
+                pt_score = (85.0 if upside_pct > 20 else 65.0 if upside_pct > 5 else 50.0 if upside_pct > -5 else 25.0)
+                if upside_pct > 10:
+                    prob_up += 0.04
+                    reasoning.append(f"Analyst price target implies {upside_pct:+.1f}% upside (target ${target_mean:.2f}).")
+                elif upside_pct < -10:
+                    prob_up -= 0.04
+                    reasoning.append(f"Analyst price target implies {upside_pct:.1f}% downside from current.")
+                factor_scores["price_target_upside"] = FactorScore(
+                    name="Analyst Price Target Upside",
+                    value=round(upside_pct, 2),
+                    score=pt_score,
+                    interpretation=f"Mean target ${target_mean:.2f} vs current ${current_p:.2f} → {upside_pct:+.1f}% upside",
+                )
+        except Exception:
+            pass
+
+        # ── New: AAII Sentiment Survey (Contrarian) ───────────────────────
+        try:
+            from data.macro import MacroData
+            macro_d = MacroData()
+            aaii_bull = macro_d.get_series("AAIIBULL", years_back=1)
+            aaii_bear = macro_d.get_series("AAIIBEAR", years_back=1)
+            if (aaii_bull is not None and len(aaii_bull) >= 2 and
+                    aaii_bear is not None and len(aaii_bear) >= 2):
+                bull_pct = float(aaii_bull.iloc[-1].iloc[0])
+                bear_pct = float(aaii_bear.iloc[-1].iloc[0])
+                bull_bear_spread = bull_pct - bear_pct
+                # Contrarian: extreme bearishness = buy signal
+                if bull_bear_spread < -20:
+                    aaii_score = 75.0
+                    prob_up += 0.04
+                    reasoning.append(f"AAII extreme bearishness (bull-bear: {bull_bear_spread:+.0f}%) — contrarian buy signal.")
+                elif bull_bear_spread > 30:
+                    aaii_score = 25.0
+                    prob_up -= 0.03
+                    reasoning.append(f"AAII extreme bullishness (bull-bear: {bull_bear_spread:+.0f}%) — contrarian caution.")
+                else:
+                    aaii_score = 50.0
+                factor_scores["aaii_sentiment"] = FactorScore(
+                    name="AAII Sentiment Survey",
+                    value=round(bull_bear_spread, 1),
+                    score=aaii_score,
+                    interpretation=f"Bull: {bull_pct:.0f}% | Bear: {bear_pct:.0f}% | Spread: {bull_bear_spread:+.0f}% (contrarian indicator)",
+                )
+        except Exception:
+            pass
+
+        # ── New: Margin Debt Proxy (FRED) ─────────────────────────────────
+        try:
+            from data.macro import MacroData
+            macro_d2 = MacroData()
+            # FINNWILSHIRE = Wilshire 5000 as margin debt proxy alternative
+            # Use RBUSBIS: reserve balances or check BOGZ1FL664220005Q margin accounts
+            # Use consumer credit as proxy for leveraged retail demand
+            cc = macro_d2.get_series("TOTALSL", years_back=1)   # Total Consumer Credit
+            if cc is not None and len(cc) >= 3:
+                cc_now  = float(cc.iloc[-1].iloc[0])
+                cc_prev = float(cc.iloc[-3].iloc[0])
+                cc_chg  = (cc_now / cc_prev - 1) * 100
+                # Rising consumer credit = leveraged demand (short-term bullish, long-term risk)
+                md_score = (60.0 if cc_chg > 2 else 50.0 if cc_chg > 0 else 40.0)
+                factor_scores["consumer_credit_proxy"] = FactorScore(
+                    name="Consumer Credit (Margin Proxy)",
+                    value=round(cc_chg, 2),
+                    score=md_score,
+                    interpretation=f"Consumer credit 3M change: {cc_chg:+.2f}% ({'leverage expanding' if cc_chg > 2 else 'deleveraging' if cc_chg < -1 else 'stable'})",
+                )
+        except Exception:
+            pass
+
         # ── Clamp & Vote ──────────────────────────────────────────────────
         prob_up = max(0.01, min(0.99, prob_up))
         confidence = max(0.0, min(1.0, confidence))

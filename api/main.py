@@ -12,6 +12,8 @@ Features:
 import time
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env")
 from typing import Dict, Any, List
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -790,14 +792,56 @@ def _build_action_summary(
     }
 
 
+# Agent weight multipliers per horizon. Keys are agent names; higher = more influential.
+_HORIZON_WEIGHTS: dict[str, dict[str, float]] = {
+    "1d": {"technical": 3.0, "volatility": 3.0, "sentiment": 2.0, "macro": 0.5,
+           "fundamental": 0.2, "insider": 0.5, "currency": 0.5, "geopolitical": 0.3},
+    "1w": {"technical": 2.5, "volatility": 2.5, "sentiment": 1.8, "macro": 0.8,
+           "fundamental": 0.3, "insider": 0.8, "currency": 0.8, "geopolitical": 0.5},
+    "1m": {"technical": 1.0, "volatility": 1.0, "sentiment": 1.0, "macro": 1.0,
+           "fundamental": 1.0, "insider": 1.0, "currency": 1.0, "geopolitical": 1.0},
+    "3m": {"technical": 0.5, "volatility": 0.5, "sentiment": 0.7, "macro": 1.5,
+           "fundamental": 2.0, "insider": 2.0, "currency": 1.2, "geopolitical": 1.5},
+    "6m": {"technical": 0.3, "volatility": 0.3, "sentiment": 0.5, "macro": 2.0,
+           "fundamental": 2.5, "insider": 2.5, "currency": 1.5, "geopolitical": 2.0},
+    "1y": {"technical": 0.2, "volatility": 0.2, "sentiment": 0.3, "macro": 2.5,
+           "fundamental": 3.0, "insider": 3.0, "currency": 2.0, "geopolitical": 2.5},
+}
+
+def _apply_horizon_weights(agent_results: list, horizon: str) -> float:
+    """Reblend agent probability_up values using horizon-specific weights."""
+    weights = _HORIZON_WEIGHTS.get(horizon, _HORIZON_WEIGHTS["1m"])
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for res in agent_results:
+        name = getattr(res, "agent_name", None) or (res.get("agent_name") if isinstance(res, dict) else None)
+        if not name or name == "risk":  # risk is circuit-breaker, exclude from blend
+            continue
+        p = getattr(res, "probability_up", None)
+        if p is None and isinstance(res, dict):
+            p = res.get("probability_up", 0.5)
+        p = float(p or 0.5)
+        w = weights.get(name, 1.0)
+        weighted_sum += w * p
+        weight_total += w
+    if weight_total == 0:
+        return 0.5
+    return max(0.02, min(0.98, weighted_sum / weight_total))
+
+
 @app.get("/api/v1/signal/{ticker}")
-async def get_signal(ticker: str):
+async def get_signal(ticker: str, horizon: str = "1m"):
     """
     Executes the full multi-agent orchestrator for a given ticker.
+    horizon: 1d | 1w | 1m | 3m | 6m | 1y  — reweights agent blend for the chosen timeframe.
     """
+    horizon = horizon.lower().strip()
+    if horizon not in _HORIZON_WEIGHTS:
+        horizon = "1m"
+
     start_time = time.time()
-    logger.info(f"Received signal request for: {ticker}")
-    
+    logger.info(f"Received signal request for: {ticker} (horizon={horizon})")
+
     try:
         md = MarketData(ticker)
         initial_state = {
@@ -805,10 +849,10 @@ async def get_signal(ticker: str):
             "market_data": md,
             "registry": registry
         }
-        
+
         # Invoke the LangGraph pipeline
         result_state = graph.invoke(initial_state)
-        
+
         final_info = result_state["final_signal"]
         packet = final_info["packet"]
         
@@ -816,21 +860,40 @@ async def get_signal(ticker: str):
         latency_ms = (time.time() - start_time) * 1000
         packet.computation_time_ms = latency_ms
         packet.agents_used = len(packet.agent_results)
-        
+
+        # ── Horizon-weighted probability blend ──────────────────────────────
+        base_prob = final_info["probability_up"]
+        if horizon == "1m":
+            # 1m is the default orchestrator blend — use as-is
+            horizon_prob = base_prob
+        else:
+            # Reblend using horizon-specific agent weights
+            horizon_prob = _apply_horizon_weights(packet.agent_results, horizon)
+            # Nudge toward base_prob with 20% anchoring to keep direction stable
+            horizon_prob = 0.8 * horizon_prob + 0.2 * base_prob
+
+        # Derive direction from horizon probability
+        if horizon_prob >= 0.55:
+            horizon_direction = "LONG"
+        elif horizon_prob <= 0.45:
+            horizon_direction = "SHORT"
+        else:
+            horizon_direction = "NEUTRAL"
+
         # Record metrics
         Monitor.record_request(latency_ms, success=True)
         for res in packet.agent_results:
             Monitor.record_agent_run(res.agent_name, res.computation_time_ms, success=True)
-            
+
         # ── Persistent Storage ──
         signal_data = {
-            "direction": packet.direction,
-            "probability": final_info["probability_up"],
+            "direction": horizon_direction,
+            "probability": horizon_prob,
             "conviction": packet.conviction_pct,
             "multiplier": final_info.get("multiplier", 1.0)
         }
         trade_id = db_manager.record_signal(ticker, signal_data, packet.agent_results)
-            
+
         # Build holding period / signal validity block
         hp = packet.holding_period
         from datetime import date, timedelta
@@ -851,8 +914,8 @@ async def get_signal(ticker: str):
 
         summary = _build_action_summary(
             ticker      = ticker,
-            direction   = packet.direction,
-            probability = final_info["probability_up"],
+            direction   = horizon_direction,
+            probability = horizon_prob,
             conviction  = packet.conviction_pct,
             entropy     = final_info.get("entropy", 0.0),
             multiplier  = final_info.get("multiplier", 1.0),
@@ -862,18 +925,20 @@ async def get_signal(ticker: str):
         )
 
         return {
-            "trade_id": trade_id,
-            "ticker": ticker,
-            "direction": packet.direction,
-            "probability": final_info["probability_up"],
-            "conviction": packet.conviction_pct,
-            "multiplier": final_info.get("multiplier", 1.0),
-            "entropy": final_info.get("entropy", 0.0),
-            "agents": packet.agent_results,
-            "warnings": packet.warnings,
+            "trade_id":       trade_id,
+            "ticker":         ticker,
+            "horizon":        horizon,
+            "direction":      horizon_direction,
+            "probability":    round(horizon_prob, 4),
+            "base_probability": round(base_prob, 4),
+            "conviction":     packet.conviction_pct,
+            "multiplier":     final_info.get("multiplier", 1.0),
+            "entropy":        final_info.get("entropy", 0.0),
+            "agents":         packet.agent_results,
+            "warnings":       packet.warnings,
             "holding_period": holding_block,
-            "summary": summary,
-            "latency_ms": round(latency_ms, 1)
+            "summary":        summary,
+            "latency_ms":     round(latency_ms, 1),
         }
         
     except Exception as e:
@@ -1000,6 +1065,310 @@ RULES: Answer only from this context. Do not invent numbers. If entropy > 0.8, n
     except Exception as e:
         logger.error(f"Chat API error: {e}")
         raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
+
+
+@app.get("/api/v1/ticker/holders/{ticker}")
+async def get_ticker_holders(ticker: str):
+    """
+    Returns institutional holders, mutual fund holders, major-holder percentages,
+    and congressional trading activity for a given ticker.
+    Congressional data requires QUIVER_API_KEY in .env (free tier at quiverquant.com).
+    """
+    import yfinance as yf
+    import math, os
+
+    sym = ticker.upper()
+    t   = yf.Ticker(sym)
+
+    result: dict = {
+        "ticker":              sym,
+        "major_holders":       {},
+        "institutional":       [],
+        "mutual_funds":        [],
+        "congressional":       [],
+        "congressional_note":  "",
+    }
+
+    def _safe(v):
+        try:
+            fv = float(v)
+            return None if (math.isnan(fv) or math.isinf(fv)) else fv
+        except Exception:
+            return None
+
+    def _pct(raw):
+        v = _safe(raw)
+        if v is None: return None
+        return round(v * 100, 2) if v < 1.5 else round(v, 2)
+
+    def _row(row, cols):
+        """Try multiple possible column name variations."""
+        for c in cols:
+            if c in row.index:
+                return row[c]
+        return None
+
+    # ── Major holders breakdown ───────────────────────────────────────
+    # yfinance returns a DataFrame with index=Breakdown label, column=Value
+    try:
+        mh = t.major_holders
+        if mh is not None and not mh.empty:
+            # Works with both old (two-column) and new (index+Value) formats
+            if "Value" in mh.columns:
+                for label, val in mh["Value"].items():
+                    v = _safe(val)
+                    if v is not None:
+                        label_s = str(label)
+                        result["major_holders"][label_s] = round(v * 100, 2) if v < 1.5 else round(v, 2)
+            else:
+                vals   = mh.iloc[:, 0].tolist()
+                labels = mh.iloc[:, 1].tolist() if mh.shape[1] > 1 else list(mh.index)
+                for i in range(min(len(vals), len(labels))):
+                    v = _safe(vals[i])
+                    if v is not None:
+                        result["major_holders"][str(labels[i])] = round(v * 100, 2) if v < 1.5 else round(v, 2)
+    except Exception:
+        pass
+
+    # ── Institutional holders ─────────────────────────────────────────
+    # Columns: Date Reported, Holder, pctHeld, Shares, Value, pctChange
+    try:
+        ih = t.institutional_holders
+        if ih is not None and not ih.empty:
+            for _, row in ih.head(12).iterrows():
+                name   = str(row.get("Holder", ""))
+                shares = _safe(row.get("Shares"))
+                value  = _safe(row.get("Value"))
+                pct    = _safe(row.get("pctHeld") or row.get("% Out") or row.get("pct_out"))
+                if name and name not in ("nan", "None", ""):
+                    result["institutional"].append({
+                        "name":     name,
+                        "shares":   int(shares) if shares else None,
+                        "value_m":  round(value / 1e6, 1) if value else None,
+                        "pct_out":  round(pct * 100, 2) if pct and pct < 1.5 else (round(pct, 2) if pct else None),
+                    })
+    except Exception:
+        pass
+
+    # ── Mutual fund holders ───────────────────────────────────────────
+    # Same column schema as institutional_holders
+    try:
+        mfh = t.mutualfund_holders
+        if mfh is not None and not mfh.empty:
+            for _, row in mfh.head(8).iterrows():
+                name   = str(row.get("Holder", ""))
+                shares = _safe(row.get("Shares"))
+                value  = _safe(row.get("Value"))
+                pct    = _safe(row.get("pctHeld") or row.get("% Out") or row.get("pct_out"))
+                if name and name not in ("nan", "None", ""):
+                    result["mutual_funds"].append({
+                        "name":    name,
+                        "shares":  int(shares) if shares else None,
+                        "value_m": round(value / 1e6, 1) if value else None,
+                        "pct_out": round(pct * 100, 2) if pct and pct < 1.5 else (round(pct, 2) if pct else None),
+                    })
+    except Exception:
+        pass
+
+    # ── Congressional trades (House + Senate Stock Watcher — free, no key) ──
+    try:
+        import urllib.request as _ureq
+        import json as _json
+
+        _HEADERS = {"User-Agent": "AlphaAgent/2.0", "Accept": "application/json"}
+
+        # ── House of Representatives (STOCK Act disclosures) ─────────────
+        try:
+            _house_url = (
+                "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com"
+                "/data/all_transactions.json"
+            )
+            _req = _ureq.Request(_house_url, headers=_HEADERS)
+            with _ureq.urlopen(_req, timeout=10) as _resp:
+                _house_data = _json.loads(_resp.read())
+            for _tr in _house_data:
+                if str(_tr.get("ticker", "")).upper().strip() == sym:
+                    result["congressional"].append({
+                        "politician":  _tr.get("representative", "Unknown"),
+                        "party":       _tr.get("party", ""),
+                        "chamber":     "House",
+                        "transaction": _tr.get("type", ""),
+                        "range":       _tr.get("amount", ""),
+                        "date":        _tr.get("transaction_date", ""),
+                    })
+                    if len(result["congressional"]) >= 6:
+                        break
+        except Exception as _e:
+            logger.debug(f"House Stock Watcher failed: {_e}")
+
+        # ── Senate (STOCK Act disclosures) ────────────────────────────────
+        try:
+            _senate_url = (
+                "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com"
+                "/aggregate/all_transactions.json"
+            )
+            _req2 = _ureq.Request(_senate_url, headers=_HEADERS)
+            with _ureq.urlopen(_req2, timeout=10) as _resp2:
+                _senate_data = _json.loads(_resp2.read())
+            for _tr in _senate_data:
+                if str(_tr.get("ticker", "")).upper().strip() == sym:
+                    _name = (
+                        f"{_tr.get('first_name', '')} {_tr.get('last_name', '')}".strip()
+                        or _tr.get("senator", "Unknown")
+                    )
+                    result["congressional"].append({
+                        "politician":  _name,
+                        "party":       _tr.get("party", ""),
+                        "chamber":     "Senate",
+                        "transaction": _tr.get("type", ""),
+                        "range":       _tr.get("amount", ""),
+                        "date":        _tr.get("transaction_date", ""),
+                    })
+                    if len(result["congressional"]) >= 12:
+                        break
+        except Exception as _e:
+            logger.debug(f"Senate Stock Watcher failed: {_e}")
+
+        if result["congressional"]:
+            result["congressional_note"] = (
+                f"{len(result['congressional'])} trade(s) found "
+                "via House & Senate Stock Watcher (STOCK Act)"
+            )
+        else:
+            result["congressional_note"] = f"No congressional trades on record for {sym}"
+
+    except Exception as _e:
+        logger.warning(f"Congressional data fetch failed for {sym}: {_e}")
+        result["congressional_note"] = "Congressional data temporarily unavailable"
+
+    return result
+
+
+@app.post("/api/v1/market-chat")
+async def market_chat(body: dict):
+    """
+    Global Market AI assistant — answers news, earnings, and market questions.
+    Detects deep-analysis requests and returns a structured intent for the frontend.
+    Body: {"message": str, "history": [{"role": str, "content": str}]}
+    Returns: {"answer": str, "intent": str, "ticker": str|null, "correction": dict|null}
+    """
+    import os
+    import json as _json
+    from datetime import date
+    from concurrent.futures import ThreadPoolExecutor
+
+    message = (body.get("message") or "").strip()
+    history  = body.get("history") or []
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    # ── Quick context: news headlines (4s timeout) ────────────────
+    news_headlines: list[str] = []
+    try:
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futs = [ex.submit(_parse_rss, src, url, 4) for src, url in _RSS_FEEDS[:4]]
+            for fut in futs:
+                try:
+                    for a in fut.result(timeout=4):
+                        h = f"[{a['publisher']}] {a['title']}"
+                        if h not in news_headlines:
+                            news_headlines.append(h)
+                        if len(news_headlines) >= 10:
+                            break
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    news_block     = "\n".join(f"- {h}" for h in news_headlines[:10]) or "- (headlines unavailable)"
+    today_str      = date.today().isoformat()
+
+    system_prompt = (
+        f"You are Market AI — an intelligent assistant embedded in AlphaAgent, a professional quantitative trading platform.\n\n"
+        f"Today: {today_str}\n\n"
+        "=== LIVE MARKET NEWS ===\n"
+        f"{news_block}\n\n"
+        "=== YOUR CAPABILITIES ===\n"
+        "1. General market info: latest news, earnings calendar, macro trends, sector moves, what's driving markets\n"
+        "2. Deep analysis: if a user asks to analyze / research / get a signal on a stock, ETF, crypto, index, or commodity — set intent to deep_analysis and provide the ticker\n"
+        "3. Ticker correction: if the user mentions an asset with a wrong/misspelled name, correct it and get confirmation\n\n"
+        "=== KNOWN ASSETS (use exact ticker symbols) ===\n"
+        "Stocks: AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, AMD, INTC, JPM, BAC, GS, WMT, HD, DIS, NFLX, XOM, CVX, PFE, JNJ, MRK, UNH, CRM, PYPL, SBUX, NKE, V, MA, COST\n"
+        "ETFs: SPY (S&P 500), QQQ (NASDAQ 100), IWM (Russell 2000), GLD (Gold), TLT (Bonds), VTI, VOO, ARKK, XLF, XLK, XLE, IBIT (Bitcoin ETF), ETHA (Ethereum ETF)\n"
+        "Indices→ETF proxy: S&P 500→SPY, NASDAQ→QQQ, Dow→DIA, Russell→IWM\n"
+        "Crypto: BTC-USD (Bitcoin), ETH-USD (Ethereum), BNB-USD, SOL-USD, XRP-USD\n"
+        "Commodities: GC=F (Gold), CL=F (Crude Oil), SI=F (Silver), NG=F (Natural Gas) — or their ETF proxies\n"
+        "Mutual Funds: use the ETF equivalent (e.g. Fidelity 500 Index → SPY or VOO)\n\n"
+        "=== RESPONSE FORMAT ===\n"
+        "Respond naturally and helpfully. Be concise (under 200 words unless detail is requested).\n"
+        "Use bullet points for lists. Use **bold** for key terms.\n\n"
+        "CRITICAL: End every response with exactly this block (no exceptions):\n"
+        "---JSON---\n"
+        '{"intent":"general","ticker":null,"correction":null}\n'
+        "---END---\n\n"
+        'Set "intent" to one of:\n'
+        '- "general" — answering a general market/news/earnings question\n'
+        '- "deep_analysis" — user wants a detailed quant signal on a specific asset; set "ticker" to the symbol (e.g. "AAPL", "BTC-USD", "GLD")\n'
+        '- "confirm_ticker" — user mentioned an asset but the name is ambiguous or possibly misspelled; set "correction" to {"original":"what they said","suggested":"TICKER","suggested_name":"Full Name"}\n\n'
+        "RULES:\n"
+        '- For deep_analysis: resolve the best ticker. "Apple" → "AAPL", "Bitcoin" → "BTC-USD", "S&P 500" or "SPY" → "SPY", "gold" → "GLD".\n'
+        '- For confirm_ticker: only use when genuinely uncertain (e.g. "Goggle stock", "Berkshire A or B?").\n'
+        "- Never fabricate prices or returns — you only know today's news headlines above.\n"
+        "- Be warm, direct, and actionable. If asked what you can do, explain briefly."
+    )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {
+            "answer": (
+                "Market AI is offline — ANTHROPIC_API_KEY not configured.\n\n"
+                "When enabled, I can answer market news questions, show upcoming earnings, "
+                "and launch deep quant analysis on any stock, ETF, crypto, or commodity."
+            ),
+            "intent": "general",
+            "ticker": None,
+            "correction": None,
+        }
+
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=api_key)
+
+        messages = [{"role": h["role"], "content": h["content"]} for h in history[-12:]]
+        messages.append({"role": "user", "content": message})
+
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            system=system_prompt,
+            messages=messages,
+        )
+        raw = (msg.content[0].text if msg.content else "").strip()
+
+        # Parse the JSON action block
+        intent     = "general"
+        ticker     = None
+        correction = None
+        answer     = raw
+
+        if "---JSON---" in raw:
+            parts  = raw.split("---JSON---", 1)
+            answer = parts[0].strip()
+            tail   = parts[1]
+            json_str = tail.split("---END---")[0].strip() if "---END---" in tail else tail.strip()
+            try:
+                parsed     = _json.loads(json_str)
+                intent     = parsed.get("intent", "general")
+                ticker     = parsed.get("ticker")
+                correction = parsed.get("correction")
+            except Exception:
+                pass
+
+        return {"answer": answer, "intent": intent, "ticker": ticker, "correction": correction}
+
+    except Exception as e:
+        logger.error(f"market_chat error: {e}")
+        raise HTTPException(status_code=500, detail=f"Market AI error: {str(e)}")
 
 
 @app.get("/api/v1/metrics")

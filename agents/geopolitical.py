@@ -38,7 +38,11 @@ def _fetch(ticker: str, period: str = "3mo") -> "pd.Series":
                          auto_adjust=True, progress=False)
         if df.empty:
             return pd.Series(dtype=float)
-        return df["Close"].squeeze().dropna()
+        close = df["Close"]
+        # Handle MultiIndex columns (yfinance may return (Close, TICKER) tuples)
+        if hasattr(close, 'columns'):
+            close = close.iloc[:, 0]
+        return close.squeeze().dropna()
     except Exception as e:
         logger.warning(f"[GeoAgent] {ticker}: {e}")
         import pandas as pd
@@ -55,9 +59,9 @@ def _rel_strength(ticker: str, bench: str = "SPY", period: str = "3mo",
     b = _fetch(bench, period)
     if len(t) < lookback or len(b) < lookback:
         return 0.0
-    t_ret = (t.iloc[-1] / t.iloc[-lookback] - 1) * 100
-    b_ret = (b.iloc[-1] / b.iloc[-lookback] - 1) * 100
-    return float(t_ret - b_ret)
+    t_ret = float(t.iloc[-1]) / float(t.iloc[-lookback]) - 1
+    b_ret = float(b.iloc[-1]) / float(b.iloc[-lookback]) - 1
+    return (t_ret - b_ret) * 100
 
 
 def _momentum(ticker: str, period: str = "3mo", lookback: int = 22) -> float:
@@ -65,7 +69,7 @@ def _momentum(ticker: str, period: str = "3mo", lookback: int = 22) -> float:
     s = _fetch(ticker, period)
     if len(s) < lookback + 1:
         return 0.0
-    return float((s.iloc[-1] / s.iloc[-lookback - 1] - 1) * 100)
+    return (float(s.iloc[-1]) / float(s.iloc[-lookback - 1]) - 1) * 100
 
 
 class GeopoliticalAgent(BaseAgent):
@@ -339,6 +343,149 @@ class GeopoliticalAgent(BaseAgent):
                     value=round(emb_mom, 2),
                     score=emb_score,
                     interpretation=f"EM bonds 1M: {emb_mom:+.1f}% ({'EM stress spreading' if emb_mom < -3 else 'stable'})",
+                )
+        except Exception:
+            pass
+
+        # ── New: Oil Price Direct Signal (Brent Crude BZ=F) ─────────────
+        try:
+            oil_mom = _momentum("BZ=F", period="3mo", lookback=22)
+            oil_score = max(10.0, min(90.0, 50.0 - oil_mom * 1.5))  # Oil up = headwind for most equities
+            factor_scores["oil_price_direct"] = FactorScore(
+                name="Oil Price (Brent BZ=F)",
+                value=round(oil_mom, 2),
+                score=oil_score,
+                interpretation=f"Brent 1M momentum: {oil_mom:+.1f}% ({'energy inflation risk' if oil_mom > 10 else 'easing energy costs' if oil_mom < -10 else 'stable'})",
+            )
+            if oil_mom > 15:
+                prob_up -= 0.05
+                reasoning.append(f"Brent crude surging {oil_mom:+.1f}% — inflationary / geopolitical tension signal.")
+            elif oil_mom < -15:
+                prob_up += 0.03
+                reasoning.append(f"Brent crude falling {oil_mom:.1f}% — demand concern but energy cost relief.")
+        except Exception:
+            pass
+
+        # ── New: Election Cycle Phase ─────────────────────────────────────
+        try:
+            import datetime
+            today = datetime.date.today()
+            # US presidential elections: every 4 years on Nov first Tuesday (2024, 2028...)
+            # 2024 election was Nov 5. 2026 midterms Nov 3. 2028 presidential Nov 7.
+            # Calculate days to next major US election
+            election_dates = [
+                datetime.date(2026, 11, 3),   # midterms
+                datetime.date(2028, 11, 7),   # presidential
+            ]
+            next_election = min((d for d in election_dates if d >= today), default=None)
+            if next_election:
+                days_to_election = (next_election - today).days
+                # Market tends to rally 12-18 months pre-election; volatile in final 3 months
+                if days_to_election < 90:
+                    elec_score = 40.0
+                    reasoning.append(f"Election in {days_to_election} days — policy uncertainty elevated.")
+                elif days_to_election < 365:
+                    elec_score = 55.0
+                    reasoning.append(f"Election in {days_to_election} days — pre-election drift typically positive.")
+                else:
+                    elec_score = 60.0
+                factor_scores["election_cycle"] = FactorScore(
+                    name="Election Cycle Phase",
+                    value=float(days_to_election),
+                    score=elec_score,
+                    interpretation=f"Next major US election: {next_election} ({days_to_election}d away) — {'policy uncertainty' if days_to_election < 90 else 'pre-election drift window' if days_to_election < 365 else 'early cycle'}",
+                )
+        except Exception:
+            pass
+
+        # ── New: Transport Index (Dow Theory Confirmation) ────────────────
+        try:
+            iyt_rs = _rel_strength("IYT", "SPY", lookback=22)
+            iyt_score = max(10.0, min(90.0, 50.0 + iyt_rs * 2.5))
+            factor_scores["transport_index"] = FactorScore(
+                name="Transport Index (IYT vs SPY)",
+                value=round(iyt_rs, 2),
+                score=iyt_score,
+                interpretation=f"IYT vs SPY RS: {iyt_rs:+.1f}% — {'transports confirming rally (Dow Theory bullish)' if iyt_rs > 3 else 'transports diverging (bearish Dow signal)' if iyt_rs < -3 else 'neutral'}",
+            )
+        except Exception:
+            pass
+
+        # ── New: Commodity Index (CRB proxy via PDBC) ─────────────────────
+        try:
+            crb_mom = _momentum("PDBC", period="3mo", lookback=22)
+            crb_score = max(10.0, min(90.0, 50.0 + crb_mom * 1.0))
+            factor_scores["commodity_index"] = FactorScore(
+                name="Commodity Index (PDBC proxy)",
+                value=round(crb_mom, 2),
+                score=crb_score,
+                interpretation=f"Commodity basket 1M: {crb_mom:+.1f}% ({'commodity inflation pressure' if crb_mom > 8 else 'deflationary' if crb_mom < -8 else 'stable'})",
+            )
+            if crb_mom > 12:
+                prob_up -= 0.04
+                reasoning.append(f"Commodity index surging {crb_mom:+.1f}% — inflation + margin pressure.")
+        except Exception:
+            pass
+
+        # ── New: GPR Index (FRED Geopolitical Risk) ───────────────────────
+        try:
+            from data.macro import MacroData as _GPRMacro
+            _gpr_macro = _GPRMacro()
+            _gpr_series = None
+            for _gpr_id in ["GPRC", "GPRGLOBAL"]:
+                try:
+                    _s = _gpr_macro.get_series(_gpr_id, years_back=2)
+                    if _s is not None and len(_s) >= 2:
+                        _gpr_series = _s
+                        break
+                except Exception:
+                    pass
+            if _gpr_series is not None:
+                _gpr_now  = float(_gpr_series.iloc[-1].iloc[0])
+                _gpr_hist = float(_gpr_series.iloc[:-1].mean().iloc[0])
+                _gpr_rel  = _gpr_now / _gpr_hist if _gpr_hist > 0 else 1.0
+                _gpr_score = max(10.0, min(90.0, 70.0 - (_gpr_rel - 1.0) * 40.0))
+                factor_scores["gpr_index"] = FactorScore(
+                    name="Geopolitical Risk Index (FRED GPR)",
+                    value=round(_gpr_rel, 3),
+                    score=_gpr_score,
+                    interpretation=(
+                        f"GPR: {_gpr_now:.1f} ({_gpr_rel:.2f}x historical avg) — "
+                        f"{'extreme geopolitical risk' if _gpr_rel > 2.0 else 'elevated risk' if _gpr_rel > 1.5 else 'calm — geopolitical tailwind' if _gpr_rel < 0.75 else 'moderate risk'}"
+                    ),
+                )
+                if _gpr_rel > 2.0:
+                    prob_up -= 0.08
+                    warnings.append(f"GEOPOLITICAL RISK EXTREME: GPR Index {_gpr_rel:.1f}x above historical average.")
+                    reasoning.append(f"GPR Index {_gpr_now:.0f} ({_gpr_rel:.1f}x avg) — extreme geopolitical risk.")
+                elif _gpr_rel > 1.5:
+                    prob_up -= 0.04
+                    reasoning.append(f"GPR elevated ({_gpr_rel:.2f}x avg) — geopolitical tension above normal.")
+                elif _gpr_rel < 0.75:
+                    prob_up += 0.03
+                    reasoning.append(f"GPR calm ({_gpr_rel:.2f}x avg) — geopolitical tailwind.")
+        except Exception as _e:
+            reasoning.append(f"GPR Index unavailable ({_e}).")
+
+        # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
+        try:
+            import numpy as _np_pca
+            _scores_arr = _np_pca.array([fs.score for fs in factor_scores.values()], dtype=float)
+            if len(_scores_arr) >= 5:
+                _norm            = (_scores_arr - 50.0) / 50.0
+                _mean_signal     = float(_np_pca.mean(_norm))
+                _signal_strength = float(_np_pca.abs(_norm).mean())
+                _dispersion      = float(_np_pca.std(_norm))
+                _consensus_score = _signal_strength * max(0.0, 1.0 - _dispersion / 1.5)
+                _pca_score = max(10.0, min(90.0, 50.0 + _mean_signal * 40.0))
+                factor_scores["pca_signal_quality"] = FactorScore(
+                    name="PCA Signal Quality",
+                    value=round(_consensus_score, 3),
+                    score=round(_pca_score, 1),
+                    interpretation=(
+                        f"Factor consensus: {_mean_signal:+.2f} | Strength: {_signal_strength:.2f} | σ: {_dispersion:.2f} — "
+                        f"{'high conviction' if _consensus_score > 0.4 else 'mixed/uncertain signal' if _consensus_score < 0.2 else 'moderate consensus'}"
+                    ),
                 )
         except Exception:
             pass

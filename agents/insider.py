@@ -165,6 +165,90 @@ class InsiderAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: Shares Outstanding Trend (Float Reduction / Dilution) ───
+        try:
+            import yfinance as yf
+            yf_tkr  = yf.Ticker(ticker)
+            inf     = yf_tkr.info
+            shares_now = inf.get("sharesOutstanding") or inf.get("impliedSharesOutstanding")
+            # Try quarterly balance sheet for trend
+            bs_q = yf_tkr.quarterly_balance_sheet
+            if bs_q is not None and not bs_q.empty:
+                share_rows = [r for r in bs_q.index
+                              if 'ordinary' in str(r).lower() or ('share' in str(r).lower() and 'issued' not in str(r).lower() and 'preferred' not in str(r).lower())]
+                if share_rows and len(bs_q.columns) >= 2:
+                    s_now = float(bs_q.loc[share_rows[0]].iloc[0])
+                    s_old = float(bs_q.loc[share_rows[0]].iloc[-1])
+                    if s_old > 0:
+                        share_chg = (s_now - s_old) / s_old * 100
+                        float_score = (85.0 if share_chg < -2 else 65.0 if share_chg < 0 else 45.0 if share_chg < 2 else 20.0)
+                        factor_scores["float_reduction"] = FactorScore(
+                            name="Float Reduction (Buyback/Dilution)",
+                            value=round(share_chg, 2),
+                            score=float_score,
+                            interpretation=f"Shares outstanding chg: {share_chg:+.1f}% ({'buyback — bullish supply squeeze' if share_chg < -1 else 'dilution — supply flood' if share_chg > 2 else 'stable float'})",
+                        )
+                        if share_chg > 3:
+                            warnings.append(f"Share dilution detected: shares up {share_chg:.1f}% — secondary offering risk.")
+        except Exception:
+            pass
+
+        # ── New: Kyle's Lambda (Price Impact / Market Microstructure) ────
+        try:
+            import yfinance as yf
+            import numpy as _np
+            hist_df = yf.Ticker(ticker).history(period="3mo", interval="1d")
+            if not hist_df.empty and len(hist_df) >= 30:
+                closes = hist_df["Close"].dropna().values
+                volumes = hist_df["Volume"].dropna().values
+                min_len = min(len(closes), len(volumes))
+                closes  = closes[-min_len:]
+                volumes = volumes[-min_len:]
+                price_chg = _np.diff(closes)
+                # signed volume: positive on up-days, negative on down-days
+                signed_vol = volumes[1:] * _np.sign(price_chg)
+                # OLS: price_change = lambda * signed_volume
+                if len(signed_vol) >= 20 and _np.std(signed_vol) > 0:
+                    cov  = _np.cov(price_chg, signed_vol)
+                    kyle_lambda = float(cov[0, 1] / cov[1, 1]) if cov[1, 1] != 0 else 0.0
+                    # Normalize: low lambda = liquid (institutions can hide); high = thin/illiquid
+                    avg_close = float(_np.mean(closes))
+                    lambda_norm = abs(kyle_lambda) * 1e6 / avg_close if avg_close > 0 else 0
+                    liq_score = max(10.0, min(90.0, 70.0 - lambda_norm * 10))
+                    factor_scores["kyle_lambda"] = FactorScore(
+                        name="Kyle's Lambda (Price Impact)",
+                        value=round(kyle_lambda * 1e6, 4),
+                        score=liq_score,
+                        interpretation=(
+                            f"λ={kyle_lambda*1e6:.4f} ×10⁻⁶ $/share "
+                            f"({'thin — whale moves easily detected' if lambda_norm > 2 else 'liquid — institutions can hide' if lambda_norm < 0.5 else 'moderate depth'})"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: Activist / 13D Proxy (High-Stakes Insider Buy via EDGAR)─
+        try:
+            edgar_snap2 = self.edgar.get_snapshot(ticker)
+            form4_filings = edgar_snap2.recent_form4
+            # Detect cluster: multiple insiders buying within 30d window
+            if form4_filings:
+                from collections import Counter
+                import datetime
+                today = __import__("datetime").date.today()
+                recent_30d = [f for f in form4_filings
+                              if hasattr(f, 'filed_at') and
+                              (today - __import__("datetime").date.fromisoformat(str(f.filed_at)[:10])).days <= 30]
+                if len(recent_30d) >= 3:
+                    factor_scores["insider_cluster_30d"] = FactorScore(
+                        name="Insider Cluster (30-Day)",
+                        value=float(len(recent_30d)),
+                        score=75.0,
+                        interpretation=f"{len(recent_30d)} insider filings in 30 days — cluster buying signal",
+                    )
+        except Exception:
+            pass
+
         # ── 3. Composite Probability ──────────────────────────────────────
         all_scores = [fs.score for fs in factor_scores.values()]
         composite_score = sum(all_scores) / len(all_scores) if all_scores else 50.0

@@ -382,6 +382,191 @@ class MacroAgent(BaseAgent):
         except Exception as e:
             reasoning.append(f"TIPS breakeven unavailable ({e}).")
 
+        # ── 16. Amihud Illiquidity Ratio (Market Microstructure) ─────────
+        try:
+            import pandas as pd
+            spy_amihud = yf.download("SPY", period="3mo", interval="1d",
+                                     auto_adjust=True, progress=False)
+            if not spy_amihud.empty and len(spy_amihud) >= 20:
+                spy_c = spy_amihud["Close"].squeeze().dropna()
+                spy_v = spy_amihud["Volume"].squeeze().dropna()
+                spy_ret_abs = spy_c.pct_change().abs().dropna()
+                dollar_vol  = (spy_c * spy_v).reindex(spy_ret_abs.index).replace(0, float("nan"))
+                amihud_raw  = (spy_ret_abs / dollar_vol).dropna()
+                amihud_val  = float(amihud_raw.iloc[-20:].mean()) * 1e9  # scale to readable units
+                amihud_hist = float(amihud_raw.mean()) * 1e9
+                amihud_rel  = amihud_val / amihud_hist if amihud_hist > 0 else 1.0
+                # Low amihud = liquid (good); high amihud = illiquid (bad)
+                amihud_score = max(10.0, min(90.0, 70.0 - (amihud_rel - 1.0) * 30.0))
+                factor_scores["amihud_illiquidity"] = FactorScore(
+                    name="Amihud Illiquidity Ratio (SPY)",
+                    value=round(amihud_rel, 3),
+                    score=amihud_score,
+                    interpretation=(
+                        f"Market illiquidity: {amihud_rel:.2f}x avg "
+                        f"({'drying up — flash crash risk' if amihud_rel > 2.0 else 'elevated' if amihud_rel > 1.3 else 'normal liquidity'})"
+                    ),
+                )
+                if amihud_rel > 2.0:
+                    reasoning.append(f"Amihud illiquidity {amihud_rel:.1f}x above normal — market depth severely impaired.")
+                    warnings.append("ILLIQUIDITY WARNING: Amihud ratio >2x — large trades will move prices significantly.")
+        except Exception as e:
+            reasoning.append(f"Amihud illiquidity unavailable ({e}).")
+
+        # ── 16b. Bond-Equity Correlation (TLT/SPY) ────────────────────────
+        try:
+            import pandas as pd
+            d_tlt = yf.download("TLT", period="6mo", interval="1d", auto_adjust=True, progress=False)
+            d_spy = yf.download("SPY", period="6mo", interval="1d", auto_adjust=True, progress=False)
+            tlt = d_tlt["Close"].squeeze().dropna()
+            spy = d_spy["Close"].squeeze().dropna()
+            if len(tlt) > 60 and len(spy) > 60:
+                tlt_ret = tlt.pct_change().dropna()
+                spy_ret = spy.pct_change().dropna()
+                aligned = pd.concat([tlt_ret, spy_ret], axis=1).dropna()
+                if len(aligned) >= 60:
+                    be_corr = float(aligned.iloc[-60:].corr().iloc[0, 1])
+                    # Negative = normal (bonds up when stocks down); both falling = systemic stress
+                    be_score = (30.0 if be_corr > 0.3 else 55.0 if be_corr > -0.2 else 70.0)
+                    factor_scores["bond_equity_corr"] = FactorScore(
+                        name="Bond-Equity Correlation (TLT/SPY)",
+                        value=round(be_corr, 3),
+                        score=be_score,
+                        interpretation=f"60d rolling TLT-SPY corr: {be_corr:+.2f} ({'systemic stress' if be_corr > 0.3 else 'flight-to-safety intact' if be_corr < -0.2 else 'neutral'})",
+                    )
+                    if be_corr > 0.3:
+                        reasoning.append(f"Bond-equity correlation positive ({be_corr:.2f}) — both assets falling: systemic risk event.")
+        except Exception as e:
+            reasoning.append(f"Bond-equity correlation unavailable ({e}).")
+
+        # ── 17. Semiconductor (SOX) Relative Performance ──────────────────
+        try:
+            sox_rs = _yf_rel_strength("SOXX", "SPY", lookback=22)
+            sox_score = max(10.0, min(90.0, 50.0 + sox_rs * 3.0))
+            factor_scores["sox_relative"] = FactorScore(
+                name="Semiconductor Index (SOX vs SPY)",
+                value=sox_rs,
+                score=sox_score,
+                interpretation=f"SOXX vs SPY RS: {sox_rs:+.1f}% — {'tech leading (growth regime)' if sox_rs > 3 else 'tech lagging (caution)' if sox_rs < -3 else 'neutral'}",
+            )
+            if sox_rs > 5:
+                reasoning.append(f"Semiconductors leading market ({sox_rs:+.1f}%) — tech growth regime confirmed.")
+            elif sox_rs < -5:
+                reasoning.append(f"Semiconductors underperforming ({sox_rs:.1f}%) — growth slowdown signal.")
+        except Exception as e:
+            reasoning.append(f"SOX data unavailable ({e}).")
+
+        # ── 18. Global Pre-Market Signal (Asia/Europe ETFs) ───────────────
+        try:
+            asia_etfs = {"EWJ": "Japan", "EWZ": "Brazil", "EWY": "Korea"}
+            eu_etfs   = {"EWG": "Germany", "EWU": "UK", "EWQ": "France"}
+            all_premarket = {}
+            for sym, name in {**asia_etfs, **eu_etfs}.items():
+                mom = _yf_momentum(sym, lookback=5, period="1mo")
+                all_premarket[name] = mom
+            if all_premarket:
+                avg_global = sum(all_premarket.values()) / len(all_premarket)
+                pm_score = max(10.0, min(90.0, 50.0 + avg_global * 3.0))
+                top_regions = sorted(all_premarket.items(), key=lambda x: x[1], reverse=True)[:2]
+                bot_regions = sorted(all_premarket.items(), key=lambda x: x[1])[:2]
+                factor_scores["global_premarket"] = FactorScore(
+                    name="Global Pre-Market Signal (Asia/EU)",
+                    value=round(avg_global, 2),
+                    score=pm_score,
+                    interpretation=f"Avg 5d return: {avg_global:+.1f}% | Leading: {top_regions[0][0]} {top_regions[0][1]:+.1f}% | Lagging: {bot_regions[0][0]} {bot_regions[0][1]:+.1f}%",
+                )
+                if avg_global < -3:
+                    reasoning.append(f"Global equity weakness (avg {avg_global:.1f}%) — contagion risk to US markets.")
+                elif avg_global > 3:
+                    reasoning.append(f"Global equity strength (avg {avg_global:+.1f}%) — risk-on globally.")
+        except Exception as e:
+            reasoning.append(f"Global pre-market data unavailable ({e}).")
+
+        # ── 19. Fed Balance Sheet (FRED WALCL) ────────────────────────────
+        try:
+            walcl = macro_data.get_series("WALCL", years_back=1)
+            if walcl is not None and len(walcl) >= 8:
+                walcl_now  = float(walcl.iloc[-1].iloc[0])
+                walcl_prev = float(walcl.iloc[-9].iloc[0])   # ~2 months ago
+                walcl_chg_pct = (walcl_now / walcl_prev - 1) * 100
+                # QE (expanding) = bullish liquidity; QT (shrinking) = tighter
+                bs_score = (75.0 if walcl_chg_pct > 1.0 else 50.0 if walcl_chg_pct > -0.5 else 30.0)
+                factor_scores["fed_balance_sheet"] = FactorScore(
+                    name="Fed Balance Sheet (WALCL)",
+                    value=round(walcl_chg_pct, 2),
+                    score=bs_score,
+                    interpretation=f"Fed assets 2M change: {walcl_chg_pct:+.2f}% ({'QE / expanding' if walcl_chg_pct > 1 else 'QT / shrinking' if walcl_chg_pct < -0.5 else 'flat'})",
+                )
+                if walcl_chg_pct < -1.0:
+                    reasoning.append(f"Fed balance sheet contracting ({walcl_chg_pct:.2f}%) — liquidity withdrawal, tightening bias.")
+                elif walcl_chg_pct > 1.0:
+                    reasoning.append(f"Fed balance sheet expanding ({walcl_chg_pct:+.2f}%) — liquidity supportive.")
+        except Exception as e:
+            reasoning.append(f"Fed balance sheet data unavailable ({e}).")
+
+        # ── 20. Growth vs Value Rotation (IWF/IWD) ────────────────────────
+        try:
+            gv_rs = _yf_rel_strength("IWF", "IWD", lookback=22)
+            gv_score = max(10.0, min(90.0, 50.0 + gv_rs * 3.0))
+            factor_scores["growth_vs_value"] = FactorScore(
+                name="Growth vs Value Rotation",
+                value=round(gv_rs, 2),
+                score=gv_score,
+                interpretation=f"IWF vs IWD RS: {gv_rs:+.1f}% — {'growth regime (risk-on)' if gv_rs > 3 else 'value regime (defensive)' if gv_rs < -3 else 'neutral'}",
+            )
+        except Exception as e:
+            reasoning.append(f"Growth/value rotation data unavailable ({e}).")
+
+        # ── 21. Repo Market Stress (SOFR vs FEDFUNDS Spread) ─────────────
+        try:
+            sofr_s = macro_data.get_series("SOFR", years_back=1)
+            ffr_s  = macro_data.get_series("FEDFUNDS", years_back=1)
+            if sofr_s is not None and len(sofr_s) >= 2 and ffr_s is not None and len(ffr_s) >= 2:
+                sofr_now   = float(sofr_s.iloc[-1].iloc[0])
+                ffr_now    = float(ffr_s.iloc[-1].iloc[0])
+                sofr_spread = sofr_now - ffr_now  # in percentage points (e.g. 0.03 = 3 bps)
+                # SOFR trades close to FEDFUNDS; widening > 25 bps = repo stress
+                repo_score = (70.0 if abs(sofr_spread) < 0.10
+                              else 50.0 if abs(sofr_spread) < 0.25
+                              else 30.0)
+                factor_scores["sofr_spread"] = FactorScore(
+                    name="Repo Market Stress (SOFR Spread)",
+                    value=round(sofr_spread, 4),
+                    score=repo_score,
+                    interpretation=(
+                        f"SOFR {sofr_now:.2f}% vs Fed Funds {ffr_now:.2f}% → spread {sofr_spread:+.4f}% "
+                        f"({'normal — repo market calm' if abs(sofr_spread) < 0.10 else 'stressed — funding squeeze' if abs(sofr_spread) > 0.25 else 'slight tension'})"
+                    ),
+                )
+                if abs(sofr_spread) > 0.50:
+                    warnings.append(f"REPO STRESS: SOFR spread to Fed Funds {sofr_spread:+.4f}% — funding market stress detected.")
+                    reasoning.append(f"Repo market stress: SOFR-FF spread {sofr_spread:+.4f}% — interbank funding tightening.")
+        except Exception as e:
+            reasoning.append(f"SOFR spread unavailable ({e}).")
+
+        # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
+        try:
+            import numpy as _np_pca
+            _scores_arr = _np_pca.array([fs.score for fs in factor_scores.values()], dtype=float)
+            if len(_scores_arr) >= 5:
+                _norm            = (_scores_arr - 50.0) / 50.0
+                _mean_signal     = float(_np_pca.mean(_norm))
+                _signal_strength = float(_np_pca.abs(_norm).mean())
+                _dispersion      = float(_np_pca.std(_norm))
+                _consensus_score = _signal_strength * max(0.0, 1.0 - _dispersion / 1.5)
+                _pca_score = max(10.0, min(90.0, 50.0 + _mean_signal * 40.0))
+                factor_scores["pca_signal_quality"] = FactorScore(
+                    name="PCA Signal Quality",
+                    value=round(_consensus_score, 3),
+                    score=round(_pca_score, 1),
+                    interpretation=(
+                        f"Factor consensus: {_mean_signal:+.2f} | Strength: {_signal_strength:.2f} | σ: {_dispersion:.2f} — "
+                        f"{'high conviction' if _consensus_score > 0.4 else 'mixed/uncertain signal' if _consensus_score < 0.2 else 'moderate consensus'}"
+                    ),
+                )
+        except Exception:
+            pass
+
         # ── Probability & Confidence ──────────────────────────────────────
         prob_up = 1.0 - result.recession_probability
 

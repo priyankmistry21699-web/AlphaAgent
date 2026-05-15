@@ -260,6 +260,83 @@ class RiskAgent(BaseAgent):
                 multiplier = 1.0
                 reasoning.append("Risk environment normal. Full position sizing permitted.")
 
+        # ── New: KL Divergence (Return Distribution Shift) ───────────────
+        try:
+            if returns is not None and len(returns) >= 60:
+                import numpy as _np
+                # Compare recent 20-day return distribution to 252-day baseline via KL divergence
+                all_ret  = returns.dropna().values
+                recent   = all_ret[-20:]
+                baseline = all_ret[-252:] if len(all_ret) >= 252 else all_ret
+
+                # Discretize into 20 equal-width bins spanning min/max
+                lo, hi = float(_np.min(baseline)), float(_np.max(baseline))
+                bins   = _np.linspace(lo, hi, 21)
+                p_recent   = _np.histogram(recent,   bins=bins, density=False)[0].astype(float) + 1e-10
+                p_baseline = _np.histogram(baseline, bins=bins, density=False)[0].astype(float) + 1e-10
+                p_recent   /= p_recent.sum()
+                p_baseline /= p_baseline.sum()
+
+                kl_div = float(_np.sum(p_recent * _np.log(p_recent / p_baseline)))
+                # High KL = current regime very different from historical = regime shift risk
+                kl_score = max(10.0, min(90.0, 70.0 - kl_div * 30.0))
+                factor_scores["kl_divergence"] = FactorScore(
+                    name="KL Divergence (Regime Shift)",
+                    value=round(kl_div, 4),
+                    score=kl_score,
+                    interpretation=(
+                        f"KL(recent‖baseline): {kl_div:.3f} "
+                        f"({'REGIME SHIFT — return distribution abnormal' if kl_div > 1.0 else 'elevated distributional drift' if kl_div > 0.4 else 'stable regime'})"
+                    ),
+                )
+                if kl_div > 1.0:
+                    warnings.append(f"KL Divergence {kl_div:.2f} — return distribution has shifted dramatically from baseline (regime break risk).")
+        except Exception:
+            pass
+
+        # ── New: Hawkes Process (Self-Exciting Jump Intensity) ────────────
+        try:
+            from quant_engine.hawkes import HawkesProcess
+            if returns is not None and len(returns) >= 60:
+                hwk = HawkesProcess()
+                hwk_res = hwk.fit(returns.dropna())
+                br = hwk_res.branching_ratio   # α/β: closer to 1 = cascade risk
+                hwk_score = max(10.0, min(90.0, 70.0 - br * 60.0))
+                factor_scores["hawkes_intensity"] = FactorScore(
+                    name="Hawkes Branching Ratio (Jump Cascade)",
+                    value=round(br, 4),
+                    score=hwk_score,
+                    interpretation=(
+                        f"α/β={br:.3f} | μ={hwk_res.mu:.4f} | events={hwk_res.n_events} "
+                        f"({'near-critical: cascade risk' if br > 0.9 else 'self-exciting regime' if br > 0.7 else 'stable'})"
+                    ),
+                )
+                if br > 0.9:
+                    warnings.append(f"Hawkes branching ratio {br:.2f} — near-critical: one large move likely to cascade into more (HFT/dark pool activity).")
+        except Exception:
+            pass
+
+        # ── New: Quasi-Monte Carlo (Sobol Sequence VaR) ───────────────────
+        try:
+            from quant_engine.quasi_mc import QuasiMonteCarloEngine
+            qmc_engine = QuasiMonteCarloEngine(current_price)
+            qmc_res = qmc_engine.simulate_gbm(
+                days=5,
+                drift_daily=0.0005,
+                vol_daily=garch_res.vol_1day_daily,
+                n_paths=4096,
+            )
+            qmc_worst = (qmc_res.ci_95_low - current_price) / current_price * 100
+            qmc_score = (75.0 if qmc_worst > -3 else 40.0 if qmc_worst > -7 else 10.0)
+            factor_scores["quasi_mc_var"] = FactorScore(
+                name="Quasi-MC VaR (Sobol)",
+                value=round(qmc_worst, 2),
+                score=qmc_score,
+                interpretation=f"QMC 5d 95% low: ${qmc_res.ci_95_low:.2f} ({qmc_worst:.1f}%) — Sobol low-discrepancy sampling",
+            )
+        except Exception:
+            pass
+
         # ── New: Liquidity Risk (Volume vs 20D Avg) ───────────────────────
         try:
             import yfinance as yf

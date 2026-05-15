@@ -360,6 +360,302 @@ class FundamentalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: Accruals Ratio (Earnings Quality) ────────────────────────
+        try:
+            ni_row  = [r for r in inc.index if 'net income' in str(r).lower()]
+            ocf_row = [r for r in cf.index  if 'operating' in str(r).lower() and 'cash' in str(r).lower()]
+            tas_row = [r for r in bal.index  if 'total assets' in str(r).lower()]
+            if ni_row and ocf_row and tas_row:
+                ni  = float(inc.loc[ni_row[0]].iloc[0])
+                ocf = float(cf.loc[ocf_row[0]].iloc[0])
+                tas = float(bal.loc[tas_row[0]].iloc[0])
+                if tas != 0:
+                    accruals_ratio = (ni - ocf) / abs(tas)
+                    ar_score = (80.0 if accruals_ratio < -0.05
+                                else 60.0 if accruals_ratio < 0.05
+                                else 35.0 if accruals_ratio < 0.15
+                                else 15.0)
+                    factor_scores["accruals_ratio"] = FactorScore(
+                        name="Accruals Ratio",
+                        value=round(accruals_ratio, 4),
+                        score=ar_score,
+                        interpretation=f"Accruals: {accruals_ratio:+.3f} ({'high-quality earnings (cash-backed)' if accruals_ratio < 0 else 'accrual-heavy' if accruals_ratio > 0.1 else 'normal'})",
+                    )
+        except Exception:
+            pass
+
+        # ── New: Forward P/E ──────────────────────────────────────────────
+        try:
+            fwd_pe = info.get("forwardPE")
+            if fwd_pe and float(fwd_pe) > 0:
+                fpe = float(fwd_pe)
+                pe_cheap = sf.get("pe_cheap", 15)
+                pe_fair  = sf.get("pe_fair", 25)
+                pe_exp   = sf.get("pe_expensive", 40)
+                fpe_score = (90.0 if fpe < pe_cheap else 65.0 if fpe < pe_fair else 35.0 if fpe < pe_exp else 10.0)
+                factor_scores["forward_pe"] = FactorScore(
+                    name="Forward P/E",
+                    value=round(fpe, 2),
+                    score=fpe_score,
+                    interpretation=f"Forward P/E: {fpe:.1f}x ({'cheap' if fpe < pe_cheap else 'fair' if fpe < pe_fair else 'expensive'})",
+                )
+        except Exception:
+            pass
+
+        # ── New: Net Margin Trend ─────────────────────────────────────────
+        try:
+            if inc is not None and not inc.empty and len(inc.columns) >= 2:
+                rev_row = [r for r in inc.index if 'total revenue' in str(r).lower() or ('revenue' in str(r).lower() and 'cost' not in str(r).lower())]
+                ni_row  = [r for r in inc.index if 'net income' in str(r).lower()]
+                if rev_row and ni_row:
+                    rev_now  = float(inc.loc[rev_row[0]].iloc[0])
+                    rev_prev = float(inc.loc[rev_row[0]].iloc[1])
+                    ni_now   = float(inc.loc[ni_row[0]].iloc[0])
+                    ni_prev  = float(inc.loc[ni_row[0]].iloc[1])
+                    if rev_now != 0 and rev_prev != 0:
+                        nm_now  = (ni_now  / rev_now)  * 100
+                        nm_prev = (ni_prev / rev_prev) * 100
+                        nm_delta = nm_now - nm_prev
+                        nm_score = (80.0 if nm_now > 15 and nm_delta > 0
+                                    else 65.0 if nm_now > 8 and nm_delta >= 0
+                                    else 50.0 if nm_now > 0 and nm_delta >= 0
+                                    else 30.0 if nm_now > 0
+                                    else 10.0)
+                        factor_scores["net_margin_trend"] = FactorScore(
+                            name="Net Margin Trend",
+                            value=round(nm_delta, 2),
+                            score=nm_score,
+                            interpretation=f"Net margin: {nm_now:.1f}% (vs {nm_prev:.1f}% prev) Δ{nm_delta:+.1f}pp — {'expanding' if nm_delta > 0.5 else 'contracting' if nm_delta < -0.5 else 'stable'}",
+                        )
+        except Exception:
+            pass
+
+        # ── New: Dividend Cut Probability ─────────────────────────────────
+        try:
+            div_yield = info.get("dividendYield") or 0
+            payout_ratio = info.get("payoutRatio") or 0
+            if div_yield and div_yield > 0:
+                div_yield_pct  = float(div_yield) * 100
+                payout_pct     = float(payout_ratio) * 100
+                # High payout + negative FCF = cut risk
+                cut_risk = payout_pct > 90 or (payout_pct > 70 and scores.fcf_yield < 0)
+                dcp_score = (25.0 if cut_risk else 70.0 if payout_pct < 50 else 50.0)
+                factor_scores["dividend_cut_prob"] = FactorScore(
+                    name="Dividend Cut Probability",
+                    value=round(payout_pct, 1),
+                    score=dcp_score,
+                    interpretation=f"Yield: {div_yield_pct:.1f}% | Payout: {payout_pct:.0f}% — {'CUT RISK' if cut_risk else 'sustainable' if payout_pct < 50 else 'elevated payout'}",
+                )
+        except Exception:
+            pass
+
+        # ── New: Shares Buyback Signal (Float Reduction) ──────────────────
+        try:
+            shares_now  = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
+            shares_old  = info.get("floatShares")
+            if not (shares_now and shares_old):
+                # Use quarterly income shares trend if available
+                import yfinance as yf
+                yf_tkr = yf.Ticker(ticker)
+                bs_q = yf_tkr.quarterly_balance_sheet
+                if bs_q is not None and not bs_q.empty:
+                    share_rows = [r for r in bs_q.index if 'share' in str(r).lower() and 'issued' not in str(r).lower()]
+                    if share_rows and len(bs_q.columns) >= 2:
+                        s_now = float(bs_q.loc[share_rows[0]].iloc[0])
+                        s_old = float(bs_q.loc[share_rows[0]].iloc[-1])
+                        if s_old > 0:
+                            share_chg_pct = (s_now - s_old) / s_old * 100
+                            bb_score = (85.0 if share_chg_pct < -3 else 65.0 if share_chg_pct < 0 else 45.0 if share_chg_pct < 2 else 20.0)
+                            factor_scores["buyback_signal"] = FactorScore(
+                                name="Shares Outstanding Trend",
+                                value=round(share_chg_pct, 2),
+                                score=bb_score,
+                                interpretation=f"Shares chg: {share_chg_pct:+.1f}% ({'buyback underway' if share_chg_pct < -1 else 'dilution risk' if share_chg_pct > 2 else 'flat'})",
+                            )
+        except Exception:
+            pass
+
+        # ── New: Fama-French 5-Factor Exposures ──────────────────────────
+        try:
+            import numpy as _np
+
+            ff_info = info  # already fetched
+            pe    = ff_info.get("trailingPE") or ff_info.get("forwardPE")
+            pb    = ff_info.get("priceToBook")
+            ev_eb = ff_info.get("enterpriseToEbitda")
+            roe   = ff_info.get("returnOnEquity")
+            margin = ff_info.get("profitMargins")
+            debt_eq = ff_info.get("debtToEquity")
+            mkt_cap = ff_info.get("marketCap") or 0
+            beta_val = ff_info.get("beta")
+
+            # ── Value factor (HML) ─────────────────────────
+            val_scores = []
+            if pe and pe > 0:
+                val_scores.append(1.0 if pe < 12 else 0.5 if pe < 18 else 0.0 if pe < 25 else -0.5 if pe < 35 else -1.0)
+            if pb and pb > 0:
+                val_scores.append(1.0 if pb < 1.5 else 0.3 if pb < 3 else -0.3 if pb < 5 else -1.0)
+            if ev_eb and ev_eb > 0:
+                val_scores.append(1.0 if ev_eb < 8 else 0.3 if ev_eb < 15 else -0.3 if ev_eb < 25 else -1.0)
+            if val_scores:
+                val = float(_np.mean(val_scores))
+                val_score = (val + 1) / 2 * 100
+                factor_scores["ff_value"] = FactorScore(
+                    name="Fama-French: Value (HML)",
+                    value=round(val, 3),
+                    score=round(val_score, 1),
+                    interpretation=f"Value loading: {val:+.2f} ({'deep value' if val > 0.5 else 'growth' if val < -0.5 else 'blend'})",
+                )
+
+            # ── Size factor (SMB) ─────────────────────────
+            if mkt_cap > 0:
+                log_cap = _np.log10(mkt_cap)
+                size_loading = float(_np.clip(-(log_cap - 10.0) / 1.5, -1.0, 1.0))
+                size_score = (size_loading + 1) / 2 * 100
+                cap_label = ("mega-cap" if log_cap > 11.5 else "large-cap" if log_cap > 10.5
+                             else "mid-cap" if log_cap > 9.5 else "small-cap")
+                factor_scores["ff_size"] = FactorScore(
+                    name="Fama-French: Size (SMB)",
+                    value=round(size_loading, 3),
+                    score=round(size_score, 1),
+                    interpretation=f"Size loading: {size_loading:+.2f} ({cap_label}, mktcap ${mkt_cap/1e9:.1f}B)",
+                )
+
+            # ── Quality / Profitability factor (RMW) ─────
+            qual_scores = []
+            if roe is not None:
+                qual_scores.append(1.0 if roe > 0.25 else 0.5 if roe > 0.15 else 0.0 if roe > 0.05 else -0.5 if roe > 0 else -1.0)
+            if margin is not None:
+                qual_scores.append(1.0 if margin > 0.25 else 0.5 if margin > 0.15 else 0.0 if margin > 0.05 else -0.5)
+            if debt_eq is not None:
+                qual_scores.append(1.0 if debt_eq < 20 else 0.5 if debt_eq < 50 else -0.3 if debt_eq < 100 else -1.0)
+            if qual_scores:
+                qual = float(_np.mean(qual_scores))
+                qual_score = (qual + 1) / 2 * 100
+                factor_scores["ff_quality"] = FactorScore(
+                    name="Fama-French: Quality (RMW)",
+                    value=round(qual, 3),
+                    score=round(qual_score, 1),
+                    interpretation=f"Quality loading: {qual:+.2f} ({'high quality' if qual > 0.4 else 'low quality' if qual < -0.4 else 'average'})",
+                )
+
+            # ── Low-Volatility / Beta factor ─────────────
+            if beta_val and isinstance(beta_val, (int, float)) and 0 < float(beta_val) < 5:
+                beta_f = float(beta_val)
+                lowvol_loading = float(_np.clip(-(beta_f - 1.0) / 1.5, -1.0, 1.0))
+                lv_score = (lowvol_loading + 1) / 2 * 100
+                factor_scores["ff_low_vol"] = FactorScore(
+                    name="Fama-French: Low-Vol (BAB)",
+                    value=round(lowvol_loading, 3),
+                    score=round(lv_score, 1),
+                    interpretation=f"Beta: {beta_f:.2f} | Low-vol loading: {lowvol_loading:+.2f} ({'defensive' if beta_f < 0.8 else 'aggressive' if beta_f > 1.3 else 'market-neutral'})",
+                )
+        except Exception:
+            pass
+
+        # ── New: CAPM Jensen's Alpha (1-Year Excess Return) ──────────────
+        try:
+            import yfinance as _yf_capm
+            import numpy as _np_capm
+            _beta = info.get("beta")
+            if _beta and 0 < float(_beta) < 5:
+                _beta_f = float(_beta)
+                from data.macro import MacroData as _MD
+                _mdata = _MD()
+                _ffr_s = _mdata.get_series("FEDFUNDS", years_back=1)
+                _rf = float(_ffr_s.iloc[-1].iloc[0]) / 100 if _ffr_s is not None and len(_ffr_s) > 0 else 0.045
+                _spy_h = _yf_capm.download("SPY", period="1y", interval="1d", auto_adjust=True, progress=False)
+                _spy_c = _spy_h["Close"].squeeze().dropna()
+                _rm = float(_spy_c.iloc[-1] / _spy_c.iloc[0] - 1) if len(_spy_c) >= 200 else 0.15
+                _stk_h = _yf_capm.download(ticker, period="1y", interval="1d", auto_adjust=True, progress=False)
+                _stk_c = _stk_h["Close"].squeeze().dropna()
+                _ri = float(_stk_c.iloc[-1] / _stk_c.iloc[0] - 1) if len(_stk_c) >= 200 else 0.0
+                _capm_exp = _rf + _beta_f * (_rm - _rf)
+                _alpha = _ri - _capm_exp
+                _alpha_pct = _alpha * 100
+                _alpha_score = max(10.0, min(90.0, 50.0 + _alpha_pct * 1.5))
+                factor_scores["capm_alpha"] = FactorScore(
+                    name="CAPM Jensen's Alpha (1Y)",
+                    value=round(_alpha_pct, 2),
+                    score=_alpha_score,
+                    interpretation=f"α={_alpha_pct:+.1f}% | CAPM expected: {_capm_exp*100:.1f}% | Actual: {_ri*100:.1f}% | β={_beta_f:.2f} — {'outperformer' if _alpha > 0.05 else 'underperformer' if _alpha < -0.05 else 'market-neutral'}",
+                )
+        except Exception:
+            pass
+
+        # ── New: Dividend Growth Rate (5-Year CAGR) ───────────────────────
+        try:
+            import yfinance as _yf_div
+            _divs = _yf_div.Ticker(ticker).dividends
+            if _divs is not None and len(_divs) >= 4:
+                _divs_ann = _divs.resample("YE").sum()
+                _divs_ann = _divs_ann[_divs_ann > 0]
+                if len(_divs_ann) >= 2:
+                    _n_years = min(5, len(_divs_ann) - 1)
+                    _div_now  = float(_divs_ann.iloc[-1])
+                    _div_then = float(_divs_ann.iloc[-_n_years - 1])
+                    if _div_then > 0:
+                        _div_cagr = ((_div_now / _div_then) ** (1 / _n_years) - 1) * 100
+                        _dgr_score = (85.0 if _div_cagr > 10 else 65.0 if _div_cagr > 5 else 50.0 if _div_cagr > 0 else 25.0)
+                        factor_scores["dividend_growth_rate"] = FactorScore(
+                            name=f"Dividend Growth Rate ({_n_years}Y CAGR)",
+                            value=round(_div_cagr, 2),
+                            score=_dgr_score,
+                            interpretation=f"Dividend CAGR: {_div_cagr:+.1f}%/yr over {_n_years}y ({'dividend compounder' if _div_cagr > 8 else 'slow grower' if _div_cagr > 0 else 'dividend cut trend'})",
+                        )
+        except Exception:
+            pass
+
+        # ── New: Lockup Expiration Proxy (IPO Supply Overhang) ────────────
+        try:
+            import datetime as _dt_lk
+            _ftd_ms = info.get("firstTradeDateMilliseconds") or info.get("firstTradeDateEpochUtc")
+            if _ftd_ms:
+                _ftd_date = _dt_lk.datetime.fromtimestamp(float(_ftd_ms) / 1000).date()
+                _days_ipo = ((_dt_lk.date.today()) - _ftd_date).days
+                if 0 <= _days_ipo <= 180:
+                    _lk_score = 25.0
+                    _lk_label = "inside 180-day lockup window — insider sell risk"
+                elif 180 < _days_ipo <= 365:
+                    _lk_score = 45.0
+                    _lk_label = "post-lockup: insider selling may linger"
+                else:
+                    _lk_score = 65.0
+                    _lk_label = f"IPO'd {_days_ipo // 365}yr ago — lockup long expired"
+                factor_scores["lockup_expiry"] = FactorScore(
+                    name="Lockup Expiration Proxy",
+                    value=float(_days_ipo),
+                    score=_lk_score,
+                    interpretation=f"Days since IPO: {_days_ipo} | {_lk_label}",
+                )
+                if 150 <= _days_ipo <= 200:
+                    warnings.append(f"LOCKUP EXPIRY: IPO was {_days_ipo}d ago — potential insider sell pressure at 180d lockup window.")
+        except Exception:
+            pass
+
+        # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
+        try:
+            import numpy as _np_pca
+            _scores_arr = _np_pca.array([fs.score for fs in factor_scores.values()], dtype=float)
+            if len(_scores_arr) >= 5:
+                _norm            = (_scores_arr - 50.0) / 50.0
+                _mean_signal     = float(_np_pca.mean(_norm))
+                _signal_strength = float(_np_pca.abs(_norm).mean())
+                _dispersion      = float(_np_pca.std(_norm))
+                _consensus_score = _signal_strength * max(0.0, 1.0 - _dispersion / 1.5)
+                _pca_score = max(10.0, min(90.0, 50.0 + _mean_signal * 40.0))
+                factor_scores["pca_signal_quality"] = FactorScore(
+                    name="PCA Signal Quality",
+                    value=round(_consensus_score, 3),
+                    score=round(_pca_score, 1),
+                    interpretation=(
+                        f"Factor consensus: {_mean_signal:+.2f} | Strength: {_signal_strength:.2f} | σ: {_dispersion:.2f} — "
+                        f"{'high conviction' if _consensus_score > 0.4 else 'mixed/uncertain signal' if _consensus_score < 0.2 else 'moderate consensus'}"
+                    ),
+                )
+        except Exception:
+            pass
+
         # ── Composite Probability ─────────────────────────────────────────
         # Base from Piotroski (0–9 → 0.1 to 0.9)
         base_prob = (scores.piotroski_score / 9.0) * 0.8 + 0.1

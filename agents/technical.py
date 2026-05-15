@@ -213,6 +213,87 @@ class TechnicalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: EMA 9/21 Crossover (Short-Term Trend) ──────────────────────
+        try:
+            ema9  = float(ohlcv["Close"].ewm(span=9,  adjust=False).mean().iloc[-1])
+            ema21 = float(ohlcv["Close"].ewm(span=21, adjust=False).mean().iloc[-1])
+            ema9_prev  = float(ohlcv["Close"].ewm(span=9,  adjust=False).mean().iloc[-2])
+            ema21_prev = float(ohlcv["Close"].ewm(span=21, adjust=False).mean().iloc[-2])
+            cross_now  = ema9 > ema21
+            cross_prev = ema9_prev > ema21_prev
+            if cross_now and not cross_prev:
+                ema_cross_signal = "bullish_crossover"
+                ema_score = 85.0
+            elif not cross_now and cross_prev:
+                ema_cross_signal = "bearish_crossover"
+                ema_score = 15.0
+            elif cross_now:
+                ema_cross_signal = "above"
+                ema_score = 68.0
+            else:
+                ema_cross_signal = "below"
+                ema_score = 32.0
+            factor_scores["ema_9_21"] = FactorScore(
+                name="EMA 9/21 Crossover",
+                value=round(ema9 - ema21, 3),
+                score=ema_score,
+                interpretation=f"EMA9 ${ema9:.2f} vs EMA21 ${ema21:.2f} — {ema_cross_signal}",
+            )
+        except Exception:
+            pass
+
+        # ── New: Bollinger Bandwidth (Volatility Squeeze) ────────────────────
+        try:
+            if hasattr(indicators, 'bb_bandwidth') and indicators.bb_bandwidth > 0:
+                bw = indicators.bb_bandwidth
+                bw_score = 70.0 if indicators.bb_signal == "squeeze" else 50.0 if bw < 20 else 35.0 if bw > 40 else 50.0
+                factor_scores["bb_bandwidth"] = FactorScore(
+                    name="Bollinger Bandwidth",
+                    value=round(bw, 2),
+                    score=bw_score,
+                    interpretation=f"BB width: {bw:.1f}% ({indicators.bb_signal}) — {'squeeze (breakout pending)' if indicators.bb_signal == 'squeeze' else 'expanded volatility' if bw > 40 else 'normal'}",
+                )
+        except Exception:
+            pass
+
+        # ── New: Momentum Acceleration (3M change in 3M momentum) ───────────
+        try:
+            if len(ohlcv) >= 130:
+                mom_now   = float(ohlcv["Close"].iloc[-1] / ohlcv["Close"].iloc[-63] - 1) * 100
+                mom_prior = float(ohlcv["Close"].iloc[-63] / ohlcv["Close"].iloc[-126] - 1) * 100
+                mom_accel = mom_now - mom_prior
+                accel_score = max(10.0, min(90.0, 50.0 + mom_accel * 1.2))
+                factor_scores["momentum_acceleration"] = FactorScore(
+                    name="Momentum Acceleration",
+                    value=round(mom_accel, 2),
+                    score=accel_score,
+                    interpretation=f"3M mom: {mom_now:+.1f}% vs prior: {mom_prior:+.1f}% (Δ {mom_accel:+.1f}%) — {'accelerating' if mom_accel > 5 else 'decelerating' if mom_accel < -5 else 'stable'}",
+                )
+        except Exception:
+            pass
+
+        # ── New: Variance Risk Premium (IV - Realized Vol) ───────────────────
+        try:
+            import yfinance as yf
+            tkr = yf.Ticker(ticker)
+            exps = tkr.options
+            if exps:
+                chain = tkr.option_chain(exps[0])
+                atm_iv = float(chain.calls["impliedVolatility"].dropna().median()) * 100
+                # 30-day realized vol (annualized)
+                ret30 = ohlcv["Close"].pct_change().dropna().iloc[-30:]
+                rv30  = float(ret30.std() * (252 ** 0.5) * 100)
+                vrp   = atm_iv - rv30
+                vrp_score = (60.0 if vrp > 0 else 75.0)  # Negative VRP = options cheap = good
+                factor_scores["variance_risk_premium"] = FactorScore(
+                    name="Variance Risk Premium",
+                    value=round(vrp, 2),
+                    score=vrp_score,
+                    interpretation=f"IV {atm_iv:.1f}% vs RV30 {rv30:.1f}% → VRP {vrp:+.1f}% ({'options expensive' if vrp > 5 else 'options cheap/fair'})",
+                )
+        except Exception:
+            pass
+
         # Momentum factors
         if momentum_result:
             factor_scores["hurst"] = FactorScore(
@@ -256,6 +337,160 @@ class TechnicalAgent(BaseAgent):
                 score=float(score),
                 interpretation=f"Calendar factor: {score:.0f}/100",
             )
+
+        # ── 5b. TDA (Topological Data Analysis) ─────────────────────────────
+        try:
+            from quant_engine.tda_signal import TDASignalEngine
+            tda_engine = TDASignalEngine()
+            tda_result = tda_engine.analyze(ohlcv["Close"])
+            # Map TDA signal [-1,+1] to score [0,100]
+            tda_score = 50.0 + tda_result.tda_signal * 40.0
+            factor_scores["tda_regime"] = FactorScore(
+                name="TDA Persistent Homology",
+                value=round(tda_result.tda_signal, 3),
+                score=round(tda_score, 1),
+                interpretation=(
+                    f"Regime: {tda_result.regime_label} | "
+                    f"H0 entropy: {tda_result.h0_persistence_entropy:.3f} | "
+                    f"H1 max: {tda_result.h1_max_persistence:.4f} | "
+                    f"Betti-1: {tda_result.betti_1} "
+                    f"({'trending — ride momentum' if tda_result.regime_label == 'TRENDING' else 'cyclic — mean-revert' if tda_result.regime_label == 'CYCLIC' else 'fragmented — regime shift' if tda_result.regime_label == 'FRAGMENTED' else 'neutral'})"
+                ),
+            )
+        except Exception:
+            pass
+
+        # ── Options-Based Factors (IV Skew, GEX, Max Pain, Implied Corr) ─
+        try:
+            import yfinance as _yf_opt
+            import numpy as _np_opt
+            _tkr_opt = _yf_opt.Ticker(ticker)
+            _exps = _tkr_opt.options
+            if _exps:
+                _chain = _tkr_opt.option_chain(_exps[0])
+                _calls = _chain.calls.dropna(subset=["strike", "impliedVolatility", "openInterest"])
+                _puts  = _chain.puts.dropna(subset=["strike", "impliedVolatility", "openInterest"])
+                _spot  = float(ohlcv["Close"].iloc[-1])
+
+                # ── IV Skew (25Δ Put-Call) ────────────────────────────────
+                try:
+                    _call_otm = _calls[_calls["strike"].between(_spot * 1.04, _spot * 1.15)]
+                    _put_otm  = _puts[_puts["strike"].between(_spot * 0.85, _spot * 0.96)]
+                    if not _call_otm.empty and not _put_otm.empty:
+                        _iv_call = float(_call_otm["impliedVolatility"].mean()) * 100
+                        _iv_put  = float(_put_otm["impliedVolatility"].mean()) * 100
+                        _iv_skew = _iv_put - _iv_call
+                        _skew_score = max(10.0, min(90.0, 60.0 - _iv_skew * 2.0))
+                        factor_scores["iv_skew"] = FactorScore(
+                            name="IV Skew (25Δ Put-Call)",
+                            value=round(_iv_skew, 2),
+                            score=_skew_score,
+                            interpretation=f"Put IV {_iv_put:.1f}% vs Call IV {_iv_call:.1f}% → Skew {_iv_skew:+.1f}% ({'bearish tail-risk hedging' if _iv_skew > 5 else 'bullish/complacent skew' if _iv_skew < -2 else 'neutral'})",
+                        )
+                except Exception:
+                    pass
+
+                # ── Gamma Exposure (GEX) ──────────────────────────────────
+                try:
+                    _T_gex   = 21 / 365
+                    _two_pi  = float(_np_opt.sqrt(2 * _np_opt.pi))
+                    _gex_net = 0.0
+                    for _, _row in _calls.iterrows():
+                        try:
+                            _K = float(_row["strike"]); _iv = float(_row["impliedVolatility"]); _oi = float(_row["openInterest"])
+                            if _iv > 0 and _K > 0:
+                                _d1 = (_np_opt.log(_spot / _K) + (0.045 + 0.5 * _iv ** 2) * _T_gex) / (_iv * _np_opt.sqrt(_T_gex))
+                                _gamma = float(_np_opt.exp(-0.5 * _d1 ** 2) / (_two_pi * _spot * _iv * _np_opt.sqrt(_T_gex)))
+                                _gex_net += _gamma * _oi * 100 * _spot
+                        except Exception:
+                            pass
+                    for _, _row in _puts.iterrows():
+                        try:
+                            _K = float(_row["strike"]); _iv = float(_row["impliedVolatility"]); _oi = float(_row["openInterest"])
+                            if _iv > 0 and _K > 0:
+                                _d1 = (_np_opt.log(_spot / _K) + (0.045 + 0.5 * _iv ** 2) * _T_gex) / (_iv * _np_opt.sqrt(_T_gex))
+                                _gamma = float(_np_opt.exp(-0.5 * _d1 ** 2) / (_two_pi * _spot * _iv * _np_opt.sqrt(_T_gex)))
+                                _gex_net -= _gamma * _oi * 100 * _spot
+                        except Exception:
+                            pass
+                    _gex_m = _gex_net / 1e6
+                    factor_scores["gamma_exposure"] = FactorScore(
+                        name="Gamma Exposure (GEX)",
+                        value=round(_gex_m, 2),
+                        score=65.0 if _gex_net > 0 else 35.0,
+                        interpretation=f"Net GEX: ${_gex_m:+.1f}M ({'dealers long γ — vol suppression/mean-reversion' if _gex_net > 0 else 'dealers short γ — vol amplification/trending'})",
+                    )
+                except Exception:
+                    pass
+
+                # ── Max Pain ──────────────────────────────────────────────
+                try:
+                    _all_strikes = sorted(set(list(_calls["strike"]) + list(_puts["strike"])))
+                    if len(_all_strikes) >= 5:
+                        _pain = {}
+                        for _s in _all_strikes:
+                            _cp = float(sum(max(0.0, float(_s) - float(row["strike"])) * float(row["openInterest"])
+                                           for _, row in _calls.iterrows()))
+                            _pp = float(sum(max(0.0, float(row["strike"]) - float(_s)) * float(row["openInterest"])
+                                           for _, row in _puts.iterrows()))
+                            _pain[_s] = _cp + _pp
+                        _mp = min(_pain, key=_pain.get)
+                        _mp_gap = (float(_mp) - _spot) / _spot * 100
+                        _mp_score = (65.0 if _mp_gap > 2 else 35.0 if _mp_gap < -2 else 50.0)
+                        factor_scores["max_pain"] = FactorScore(
+                            name="Options Max Pain",
+                            value=round(float(_mp), 2),
+                            score=_mp_score,
+                            interpretation=f"Max pain: ${float(_mp):.2f} | Spot: ${_spot:.2f} | Gap: {_mp_gap:+.1f}% ({'upside gravity to max pain' if _mp_gap > 2 else 'downside gravity' if _mp_gap < -2 else 'pinned near max pain'})",
+                        )
+                except Exception:
+                    pass
+
+                # ── Implied Correlation proxy (SPY IV / Stock IV) ─────────
+                try:
+                    _spy_tkr  = _yf_opt.Ticker("SPY")
+                    _spy_exps = _spy_tkr.options
+                    if _spy_exps:
+                        _spy_chain = _spy_tkr.option_chain(_spy_exps[0])
+                        _spy_iv  = float(_spy_chain.calls["impliedVolatility"].dropna().median()) * 100
+                        _stk_iv  = float(_calls["impliedVolatility"].dropna().median()) * 100
+                        if _stk_iv > 0:
+                            _impl_corr = _spy_iv / _stk_iv
+                            _ic_score  = max(10.0, min(90.0, 70.0 - _impl_corr * 30.0))
+                            factor_scores["implied_correlation"] = FactorScore(
+                                name="Implied Correlation (SPY/Stock IV)",
+                                value=round(_impl_corr, 3),
+                                score=_ic_score,
+                                interpretation=f"SPY IV {_spy_iv:.1f}% / Stock IV {_stk_iv:.1f}% = {_impl_corr:.2f} ({'macro-driven — limited alpha' if _impl_corr > 0.8 else 'idiosyncratic — alpha opportunity' if _impl_corr < 0.4 else 'mixed systemic/idiosyncratic'})",
+                            )
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
+        try:
+            import numpy as _np_pca
+            _scores_arr = _np_pca.array([fs.score for fs in factor_scores.values()], dtype=float)
+            if len(_scores_arr) >= 5:
+                _norm            = (_scores_arr - 50.0) / 50.0
+                _mean_signal     = float(_np_pca.mean(_norm))
+                _signal_strength = float(_np_pca.abs(_norm).mean())
+                _dispersion      = float(_np_pca.std(_norm))
+                _consensus_score = _signal_strength * max(0.0, 1.0 - _dispersion / 1.5)
+                _pca_score = max(10.0, min(90.0, 50.0 + _mean_signal * 40.0))
+                factor_scores["pca_signal_quality"] = FactorScore(
+                    name="PCA Signal Quality",
+                    value=round(_consensus_score, 3),
+                    score=round(_pca_score, 1),
+                    interpretation=(
+                        f"Factor consensus: {_mean_signal:+.2f} | Strength: {_signal_strength:.2f} | σ: {_dispersion:.2f} — "
+                        f"{'high conviction' if _consensus_score > 0.4 else 'mixed/uncertain signal' if _consensus_score < 0.2 else 'moderate consensus'}"
+                    ),
+                )
+        except Exception:
+            pass
 
         # ── 6. Composite Probability ─────────────────────────────────────
         # Blend core composite (60%) with all factor scores (40%)
