@@ -404,6 +404,36 @@ input[type=number]{width:100px}
 .hz-btn:hover{background:var(--card2);color:var(--text)}
 .hz-btn.hz-active{background:var(--grad);color:#fff}
 
+/* ─── Company chips ─── */
+.sig-chip{
+  display:inline-flex;flex-direction:column;align-items:center;
+  padding:5px 10px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface);cursor:pointer;transition:all .15s;
+  font-size:10px;line-height:1.3;gap:1px;
+}
+.sig-chip:hover{border-color:var(--accent);background:rgba(59,130,246,.08);color:var(--blue)}
+.sig-chip .chip-ticker{font-weight:800;font-size:11px;color:var(--text)}
+.sig-chip .chip-name{font-size:9px;color:var(--dim);white-space:nowrap;max-width:64px;overflow:hidden;text-overflow:ellipsis}
+
+/* ─── Autocomplete dropdown ─── */
+.ac-item{
+  display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;
+  border-bottom:1px solid var(--border);font-size:12px;transition:background .1s;
+}
+.ac-item:last-child{border-bottom:none}
+.ac-item:hover,.ac-item.ac-focused{background:rgba(59,130,246,.1)}
+.ac-ticker{font-weight:800;color:var(--blue);min-width:44px;font-size:12px}
+.ac-name{color:var(--dim);font-size:11px;flex:1}
+.ac-sector{font-size:10px;color:var(--dim2);padding:2px 6px;border-radius:4px;background:var(--surface)}
+.ac-no-result{padding:12px 14px;color:var(--dim);font-size:12px;text-align:center}
+
+/* ─── Chart period buttons ─── */
+.chart-period-btn{
+  background:none;border:1px solid var(--border);color:var(--dim);
+  padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;cursor:pointer;
+  transition:all .15s;
+}
+
 /* ══════════════════════════════════════════ BADGES ══ */
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700}
 .b-LONG{background:rgba(0,214,143,.12);color:var(--green)}
@@ -689,10 +719,21 @@ input[type=number]{width:100px}
         <div id="sig-context-text"></div>
       </div>
       <div class="row" style="gap:8px;flex-shrink:0;align-items:center;flex-wrap:wrap">
-        <input type="text" id="sig-ticker" placeholder="AAPL, SPY, NVDA…" maxlength="12" style="width:140px"/>
+        <!-- Smart ticker search with autocomplete -->
+        <div style="position:relative">
+          <input type="text" id="sig-ticker" placeholder="Company or ticker…" maxlength="40"
+            style="width:190px" autocomplete="off"
+            oninput="onTickerInput(this.value)"
+            onkeydown="onTickerKey(event)"/>
+          <div id="sig-autocomplete" style="
+            display:none;position:absolute;top:calc(100% + 4px);left:0;z-index:999;
+            background:var(--card);border:1px solid var(--border);border-radius:8px;
+            min-width:260px;max-height:240px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)">
+          </div>
+        </div>
         <!-- Horizon selector -->
         <div id="horizon-btns" style="display:flex;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:3px">
-          <button class="hz-btn hz-active" data-hz="1d"  onclick="setHorizon('1d',this)">1D</button>
+          <button class="hz-btn"           data-hz="1d"  onclick="setHorizon('1d',this)">1D</button>
           <button class="hz-btn"           data-hz="1w"  onclick="setHorizon('1w',this)">1W</button>
           <button class="hz-btn hz-active" data-hz="1m"  onclick="setHorizon('1m',this)">1M</button>
           <button class="hz-btn"           data-hz="3m"  onclick="setHorizon('3m',this)">3M</button>
@@ -703,6 +744,12 @@ input[type=number]{width:100px}
       </div>
     </div>
     <div class="hint" id="sig-hint" style="margin-top:6px">Runs 9 agents · GARCH · HMM · EVT · Bayesian Fusion · ~30–90 seconds · Horizon: <span id="sig-hz-label">1M</span></div>
+  </div>
+
+  <!-- Top 50 quick-launch company chips -->
+  <div id="sig-top50" style="margin-bottom:12px">
+    <div style="font-size:10px;font-weight:700;color:var(--dim);letter-spacing:.08em;margin-bottom:7px">QUICK LAUNCH — TOP 50</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px" id="sig-chips"></div>
   </div>
 
   <!-- 2-column layout: left info panel + right analysis output -->
@@ -1363,6 +1410,158 @@ async function refreshETFGroup(i){
 }
 
 /* ══════════════════════════════════════════════ SIGNAL ══ */
+
+/* ─── Company database (ticker, name, sector) ─── */
+const COMPANY_DB = [
+  {t:'AAPL',  n:'Apple',               s:'Tech'},
+  {t:'MSFT',  n:'Microsoft',           s:'Tech'},
+  {t:'NVDA',  n:'NVIDIA',              s:'Tech'},
+  {t:'AMZN',  n:'Amazon',              s:'Consumer'},
+  {t:'GOOGL', n:'Alphabet (Google)',   s:'Tech'},
+  {t:'META',  n:'Meta Platforms',      s:'Tech'},
+  {t:'TSLA',  n:'Tesla',               s:'Auto/EV'},
+  {t:'AVGO',  n:'Broadcom',            s:'Semis'},
+  {t:'LLY',   n:'Eli Lilly',           s:'Health'},
+  {t:'JPM',   n:'JPMorgan Chase',      s:'Finance'},
+  {t:'V',     n:'Visa',                s:'Finance'},
+  {t:'UNH',   n:'UnitedHealth',        s:'Health'},
+  {t:'XOM',   n:'ExxonMobil',          s:'Energy'},
+  {t:'MA',    n:'Mastercard',          s:'Finance'},
+  {t:'PG',    n:'Procter & Gamble',    s:'Consumer'},
+  {t:'COST',  n:'Costco',              s:'Retail'},
+  {t:'JNJ',   n:'Johnson & Johnson',   s:'Health'},
+  {t:'HD',    n:'Home Depot',          s:'Retail'},
+  {t:'MRK',   n:'Merck',               s:'Health'},
+  {t:'ABBV',  n:'AbbVie',              s:'Health'},
+  {t:'BAC',   n:'Bank of America',     s:'Finance'},
+  {t:'CRM',   n:'Salesforce',          s:'Tech'},
+  {t:'ORCL',  n:'Oracle',              s:'Tech'},
+  {t:'CVX',   n:'Chevron',             s:'Energy'},
+  {t:'KO',    n:'Coca-Cola',           s:'Consumer'},
+  {t:'PEP',   n:'PepsiCo',             s:'Consumer'},
+  {t:'AMD',   n:'AMD',                 s:'Semis'},
+  {t:'NFLX',  n:'Netflix',             s:'Media'},
+  {t:'TMO',   n:'Thermo Fisher',       s:'Health'},
+  {t:'WMT',   n:'Walmart',             s:'Retail'},
+  {t:'CSCO',  n:'Cisco',               s:'Tech'},
+  {t:'MCD',   n:'McDonald\'s',         s:'Consumer'},
+  {t:'ABT',   n:'Abbott Labs',         s:'Health'},
+  {t:'ADBE',  n:'Adobe',               s:'Tech'},
+  {t:'DIS',   n:'Disney',              s:'Media'},
+  {t:'INTC',  n:'Intel',               s:'Semis'},
+  {t:'GE',    n:'GE Aerospace',        s:'Industrials'},
+  {t:'CAT',   n:'Caterpillar',         s:'Industrials'},
+  {t:'QCOM',  n:'Qualcomm',            s:'Semis'},
+  {t:'GS',    n:'Goldman Sachs',       s:'Finance'},
+  {t:'MS',    n:'Morgan Stanley',      s:'Finance'},
+  {t:'AMGN',  n:'Amgen',              s:'Health'},
+  {t:'TXN',   n:'Texas Instruments',  s:'Semis'},
+  {t:'SPGI',  n:'S&P Global',          s:'Finance'},
+  {t:'BLK',   n:'BlackRock',           s:'Finance'},
+  {t:'NOW',   n:'ServiceNow',          s:'Tech'},
+  {t:'UBER',  n:'Uber',                s:'Tech'},
+  {t:'SPY',   n:'S&P 500 ETF',         s:'ETF'},
+  {t:'QQQ',   n:'Nasdaq 100 ETF',      s:'ETF'},
+  {t:'BRK-B', n:'Berkshire Hathaway',  s:'Finance'},
+];
+
+/* ─── Render company chips ─── */
+(function initChips(){
+  const container = $('sig-chips');
+  if(!container) return;
+  container.innerHTML = COMPANY_DB.map(c=>`
+    <div class="sig-chip" onclick="launchChip('${c.t}')" title="${c.n} · ${c.s}">
+      <span class="chip-ticker">${c.t}</span>
+      <span class="chip-name">${c.n}</span>
+    </div>`).join('');
+})();
+
+function launchChip(ticker){
+  $('sig-ticker').value = ticker;
+  closeAutocomplete();
+  runSignal();
+}
+
+/* ─── Smart autocomplete ─── */
+let _acIdx = -1;
+
+function onTickerInput(val){
+  const q = val.trim().toUpperCase();
+  const drop = $('sig-autocomplete');
+  if(q.length < 1){ drop.style.display='none'; return; }
+
+  // Match ticker prefix first, then name substring
+  const byTicker = COMPANY_DB.filter(c => c.t.startsWith(q));
+  const byName   = COMPANY_DB.filter(c => !c.t.startsWith(q) && c.n.toUpperCase().includes(q));
+  const results  = [...byTicker, ...byName].slice(0, 8);
+
+  if(!results.length){
+    drop.innerHTML = `<div class="ac-no-result">No match — try a ticker like "AAPL" or a name like "Apple"</div>`;
+    drop.style.display = 'block';
+    _acIdx = -1;
+    return;
+  }
+
+  _acIdx = -1;
+  drop.innerHTML = results.map((c,i)=>`
+    <div class="ac-item" data-ticker="${c.t}" data-idx="${i}"
+      onmousedown="pickAutocomplete('${c.t}')"
+      onmouseover="setAcFocus(${i})">
+      <span class="ac-ticker">${c.t}</span>
+      <span class="ac-name">${c.n}</span>
+      <span class="ac-sector">${c.s}</span>
+    </div>`).join('');
+  drop.style.display = 'block';
+}
+
+function onTickerKey(e){
+  const drop = $('sig-autocomplete');
+  const items = drop.querySelectorAll('.ac-item');
+  if(e.key === 'ArrowDown'){
+    e.preventDefault();
+    _acIdx = Math.min(_acIdx+1, items.length-1);
+    setAcFocus(_acIdx);
+  } else if(e.key === 'ArrowUp'){
+    e.preventDefault();
+    _acIdx = Math.max(_acIdx-1, 0);
+    setAcFocus(_acIdx);
+  } else if(e.key === 'Enter'){
+    if(_acIdx >= 0 && items[_acIdx]){
+      pickAutocomplete(items[_acIdx].dataset.ticker);
+    } else {
+      closeAutocomplete();
+      runSignal();
+    }
+  } else if(e.key === 'Escape'){
+    closeAutocomplete();
+  }
+}
+
+function setAcFocus(idx){
+  _acIdx = idx;
+  const drop = $('sig-autocomplete');
+  drop.querySelectorAll('.ac-item').forEach((el,i)=>
+    el.classList.toggle('ac-focused', i===idx));
+}
+
+function pickAutocomplete(ticker){
+  $('sig-ticker').value = ticker;
+  closeAutocomplete();
+  runSignal();
+}
+
+function closeAutocomplete(){
+  const drop = $('sig-autocomplete');
+  if(drop) drop.style.display = 'none';
+  _acIdx = -1;
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e=>{
+  if(!e.target.closest('#sig-autocomplete') && e.target.id !== 'sig-ticker')
+    closeAutocomplete();
+});
+
 function toggleFD(name){
   const row=$(`fd-${name}`);
   const arrow=$(`fd-arrow-${name}`);
@@ -1390,9 +1589,25 @@ document.addEventListener('DOMContentLoaded', ()=>{
   if(def){ document.querySelectorAll('.hz-btn').forEach(b=>b.classList.remove('hz-active')); def.classList.add('hz-active'); }
 });
 
+function resolveTickerInput(){
+  const raw = $('sig-ticker').value.trim().toUpperCase();
+  if(!raw) return null;
+  // If it matches a ticker exactly, use it
+  const exact = COMPANY_DB.find(c => c.t === raw);
+  if(exact) return exact.t;
+  // If it matches a company name, return the ticker
+  const byName = COMPANY_DB.find(c => c.n.toUpperCase() === raw || c.n.toUpperCase().startsWith(raw));
+  if(byName) return byName.t;
+  // Fall back to raw input (handles unlisted tickers typed directly)
+  return raw;
+}
+
 async function runSignal(){
-  const ticker = $('sig-ticker').value.trim().toUpperCase();
+  closeAutocomplete();
+  const ticker = resolveTickerInput();
   if(!ticker) return;
+  // Update input to show the resolved ticker
+  $('sig-ticker').value = ticker;
   const btn = $('sig-btn');
   btn.disabled = true; btn.textContent = 'Analyzing…';
   const hzLabel = HZ_LABELS[sigHorizon] || sigHorizon.toUpperCase();
@@ -1426,19 +1641,23 @@ function showInfoPanel(ticker){
 
 let _lwChart = null;   // Lightweight Charts instance (reuse across tickers)
 
+const CHART_PERIODS = [
+  {key:'1d',  label:'1D'},
+  {key:'5d',  label:'5D'},
+  {key:'1mo', label:'1M'},
+  {key:'3mo', label:'3M'},
+  {key:'6mo', label:'6M'},
+  {key:'1y',  label:'1Y'},
+];
+
 async function renderTVChart(ticker){
   const container = $('tv-chart-container');
-  container.innerHTML = `<div style="height:280px;display:flex;align-items:center;justify-content:center">
-    <div class="spin"></div></div>`;
-
-  // Period selector
-  const periods = ['1mo','3mo','6mo','1y'];
   container.innerHTML = `
-    <div style="display:flex;gap:6px;padding:6px 10px;background:var(--card2);border-bottom:1px solid var(--border)">
-      ${periods.map(p=>`<button onclick="loadChart('${ticker}','${p}')"
-        id="chart-period-${p}"
-        style="background:none;border:1px solid var(--border);color:var(--dim);padding:2px 10px;border-radius:4px;font-size:10px;cursor:pointer">${p.toUpperCase()}</button>`).join('')}
-      <span style="margin-left:auto;font-size:10px;color:var(--dim);align-self:center">${ticker}</span>
+    <div style="display:flex;gap:4px;padding:6px 10px;background:var(--card2);border-bottom:1px solid var(--border);align-items:center">
+      ${CHART_PERIODS.map(p=>`<button onclick="loadChart('${ticker}','${p.key}')"
+        id="chart-period-${p.key}"
+        class="chart-period-btn">${p.label}</button>`).join('')}
+      <span style="margin-left:auto;font-size:10px;color:var(--dim);font-weight:700">${ticker}</span>
     </div>
     <div id="lw-chart-canvas" style="height:240px;width:100%"></div>`;
 
@@ -1447,11 +1666,13 @@ async function renderTVChart(ticker){
 
 async function loadChart(ticker, period){
   // Highlight active period button
-  ['1mo','3mo','6mo','1y'].forEach(p=>{
-    const btn = $(`chart-period-${p}`);
-    if(btn) btn.style.cssText = p===period
-      ? 'background:var(--accent);border-color:var(--accent);color:#fff;padding:2px 10px;border-radius:4px;font-size:10px;cursor:pointer'
-      : 'background:none;border:1px solid var(--border);color:var(--dim);padding:2px 10px;border-radius:4px;font-size:10px;cursor:pointer';
+  CHART_PERIODS.forEach(({key})=>{
+    const btn = $(`chart-period-${key}`);
+    if(btn){
+      btn.style.background  = key===period ? 'var(--accent)' : 'none';
+      btn.style.borderColor = key===period ? 'var(--accent)' : 'var(--border)';
+      btn.style.color       = key===period ? '#fff'          : 'var(--dim)';
+    }
   });
 
   const canvas = $('lw-chart-canvas');
@@ -2916,7 +3137,7 @@ function renderOptimize(d){
 }
 
 /* ─── Keyboard shortcuts ── */
-$('sig-ticker').addEventListener('keydown',e=>{if(e.key==='Enter')runSignal()});
+$('sig-ticker').addEventListener('keydown',e=>onTickerKey(e));
 $('bt-ticker').addEventListener('keydown',e=>{if(e.key==='Enter')runBacktest()});
 $('wf-ticker').addEventListener('keydown',e=>{if(e.key==='Enter')runWalkForward()});
 $('ql-ticker').addEventListener('keydown',e=>{if(e.key==='Enter')runQuantLab()});

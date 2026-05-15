@@ -587,16 +587,26 @@ async def get_ticker_news(ticker: str, limit: int = 10):
 async def get_ticker_history(ticker: str, period: str = "3mo"):
     """
     Returns OHLCV candlestick data for rendering charts client-side.
-    Period: 1mo, 3mo, 6mo, 1y, 2y
+    Period: 1d (5m), 5d (1h), 1mo, 3mo, 6mo, 1y, 2y
     """
     import yfinance as yf
     import pandas as pd
-    valid_periods = {"1mo", "3mo", "6mo", "1y", "2y"}
-    if period not in valid_periods:
+    # Map period → yfinance interval
+    period_interval = {
+        "1d":  ("1d",  "5m"),
+        "5d":  ("5d",  "1h"),
+        "1mo": ("1mo", "1d"),
+        "3mo": ("3mo", "1d"),
+        "6mo": ("6mo", "1d"),
+        "1y":  ("1y",  "1d"),
+        "2y":  ("2y",  "1d"),
+    }
+    if period not in period_interval:
         period = "3mo"
+    yf_period, yf_interval = period_interval[period]
     try:
         t = yf.Ticker(ticker.upper())
-        hist = t.history(period=period, interval="1d", auto_adjust=True)
+        hist = t.history(period=yf_period, interval=yf_interval, auto_adjust=True)
         if hist.empty:
             raise HTTPException(status_code=404, detail="No price history available")
 
