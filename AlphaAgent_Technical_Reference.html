@@ -1,0 +1,2165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>AlphaAgent — Complete Technical Reference</title>
+<script>
+/* Kick MathJax before the async CDN script loads */
+window.MathJax = {
+  tex: { inlineMath: [['\\(','\\)']], displayMath: [['\\[','\\]']] },
+  startup: { typeset: true }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
+<style>
+/* ── Reset ──────────────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0}
+
+/* ── Page body ──────────────────────────────────────────── */
+body{
+  font-family:'Georgia','Times New Roman',serif;
+  font-size:12pt;
+  line-height:1.75;
+  color:#111;
+  background:#fff;
+  max-width:820px;
+  margin:0 auto;
+  padding:24px 48px;
+}
+
+/* ── Headings ───────────────────────────────────────────── */
+h1{
+  font-size:26pt;
+  color:#0f2044;
+  border-bottom:3px solid #1e40af;
+  padding-bottom:10px;
+  margin:28px 0 14px;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+h2{
+  font-size:16pt;
+  color:#0f2044;
+  background:#e8f0fe;
+  border-left:5px solid #1e40af;
+  padding:10px 14px;
+  margin:36px 0 14px;
+  page-break-before:always;
+  page-break-after:avoid;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+h2.nobreak{page-break-before:auto}
+h3{
+  font-size:13pt;
+  color:#1e3a8a;
+  margin:22px 0 9px;
+  border-bottom:1.5px solid #93c5fd;
+  padding-bottom:3px;
+  page-break-after:avoid;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+h4{
+  font-size:11.5pt;
+  color:#1e3a8a;
+  margin:16px 0 7px;
+  font-weight:700;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+h5{
+  font-size:11pt;
+  color:#1d4ed8;
+  margin:12px 0 5px;
+  font-weight:600;
+  font-style:normal;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+
+/* ── Paragraphs / lists ─────────────────────────────────── */
+p{margin:8px 0}
+ul,ol{margin:8px 0 8px 26px}
+li{margin:5px 0}
+
+/* ── Tables ─────────────────────────────────────────────── */
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin:14px 0 18px;
+  font-size:10pt;
+  page-break-inside:avoid;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+th{
+  background:#1e3a8a;
+  color:#fff;
+  padding:7px 10px;
+  text-align:left;
+  font-size:9.5pt;
+  font-weight:600;
+}
+td{
+  padding:6px 10px;
+  border:1px solid #c7d9f5;
+  vertical-align:top;
+  font-size:10pt;
+}
+tr:nth-child(even) td{background:#f0f6ff}
+
+/* ── Inline code ─────────────────────────────────────────── */
+code{
+  font-family:'Consolas','Courier New',monospace;
+  background:#f0f4f8;
+  border:1px solid #d0dce8;
+  padding:1px 5px;
+  border-radius:3px;
+  font-size:9.5pt;
+  color:#0f172a;
+}
+
+/* ── Code blocks — light background for print readability ── */
+pre{
+  background:#f4f6f9;
+  color:#0f172a;
+  border:1px solid #c8d6e8;
+  border-left:4px solid #1e40af;
+  padding:14px 16px;
+  border-radius:4px;
+  font-size:9pt;
+  line-height:1.55;
+  margin:12px 0;
+  white-space:pre-wrap;
+  word-break:break-all;
+  font-family:'Consolas','Courier New',monospace;
+  page-break-inside:avoid;
+}
+pre code{background:none;border:none;padding:0;font-size:9pt;color:#0f172a}
+
+/* ── Formula box ─────────────────────────────────────────── */
+.formula-box{
+  background:#eef4ff;
+  border:1.5px solid #93c5fd;
+  border-radius:6px;
+  padding:14px 18px;
+  margin:12px 0;
+  font-size:11pt;
+  page-break-inside:avoid;
+}
+
+/* ── Call-out boxes ──────────────────────────────────────── */
+.warn-box{
+  background:#fff8f0;
+  border-left:4px solid #ea580c;
+  padding:10px 14px;
+  margin:10px 0;
+  page-break-inside:avoid;
+}
+.info-box{
+  background:#f0fdf4;
+  border-left:4px solid #16a34a;
+  padding:10px 14px;
+  margin:10px 0;
+  page-break-inside:avoid;
+}
+
+/* ── Agent chapter header — light print-safe version ──────── */
+.agent-header{
+  background:#dbeafe;
+  border:1.5px solid #3b82f6;
+  border-left:6px solid #1d4ed8;
+  padding:14px 18px;
+  border-radius:6px;
+  margin:20px 0 14px;
+  page-break-after:avoid;
+}
+.agent-header h2{
+  color:#0f2044;
+  background:none;
+  border:none;
+  margin:0;
+  padding:0;
+  page-break-before:always;
+  page-break-after:avoid;
+  font-size:16pt;
+}
+.agent-header p{
+  color:#1e3a8a;
+  font-size:10pt;
+  margin-top:5px;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+
+/* ── Factor entry card ───────────────────────────────────── */
+.factor-entry{
+  border:1px solid #c7d9f5;
+  border-left:3px solid #3b82f6;
+  border-radius:4px;
+  padding:10px 14px;
+  margin:10px 0;
+  background:#fafcff;
+  page-break-inside:avoid;
+}
+.factor-entry h5{
+  margin:0 0 5px;
+  color:#1e3a8a;
+  font-size:11pt;
+}
+
+/* ── Table of contents ───────────────────────────────────── */
+.toc{
+  background:#f8fafc;
+  border:1px solid #cbd5e1;
+  border-radius:6px;
+  padding:20px 24px;
+  margin:24px 0;
+  columns:2;
+  column-gap:28px;
+  font-family:'Segoe UI',Arial,sans-serif;
+}
+.toc a{color:#1e40af;text-decoration:none;font-size:10pt}
+.toc li{margin:4px 0}
+
+/* ── Cover page ──────────────────────────────────────────── */
+.cover{text-align:center;padding:50px 0 36px}
+.cover h1{border:none;font-size:34pt;margin-bottom:10px;background:none}
+.cover .subtitle{font-size:14pt;color:#334155;margin-bottom:26px}
+.cover .meta{font-size:10pt;color:#64748b;margin-top:18px}
+
+/* ── Misc ────────────────────────────────────────────────── */
+.page-break{page-break-before:always}
+.badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:9pt;font-weight:700;margin:2px;border:1px solid transparent}
+.b-tech{background:#dbeafe;color:#1e40af;border-color:#93c5fd}
+.b-stat{background:#ede9fe;color:#5b21b6;border-color:#c4b5fd}
+.b-fund{background:#dcfce7;color:#166534;border-color:#86efac}
+.b-macro{background:#fef9c3;color:#713f12;border-color:#fde047}
+.b-risk{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.b-ml  {background:#e0e7ff;color:#3730a3;border-color:#a5b4fc}
+.score-bar{display:inline-block;background:#dbeafe;border:1px solid #93c5fd;border-radius:3px;padding:1px 6px;font-size:9pt;font-weight:700;color:#1e3a8a}
+
+/* ── Print overrides ─────────────────────────────────────── */
+@media print{
+  body{max-width:100%;padding:8px 16px;font-size:11.5pt}
+  h2{page-break-before:always;page-break-after:avoid}
+  h2.nobreak{page-break-before:auto}
+  h3,h4,h5{page-break-after:avoid}
+  pre{white-space:pre-wrap;word-break:break-all}
+  table{page-break-inside:avoid}
+  .factor-entry,.formula-box,.warn-box,.info-box{page-break-inside:avoid}
+  a{color:#1e40af;text-decoration:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════ COVER ══════════════════════════════ -->
+<div class="cover">
+<div style="font-size:60pt;margin-bottom:16px">📊</div>
+<h1 style="border:none;font-size:36pt">AlphaAgent</h1>
+<div class="subtitle">Complete Technical Reference Manual</div>
+<div style="font-size:11pt;color:#475569;max-width:600px;margin:20px auto;line-height:1.8">
+  A production-grade, multi-agent quantitative trading intelligence system.<br>
+  9 specialist agents · 163 factors · 11 quant engine modules · LangGraph orchestration
+</div>
+<div style="margin:30px 0;padding:20px;background:#f1f5f9;border-radius:10px;display:inline-block">
+  <div style="font-size:10pt;color:#64748b">Version 6.1 — Phase 6 Complete</div>
+  <div style="font-size:10pt;color:#64748b">Document generated: May 2026</div>
+  <div style="font-size:10pt;color:#64748b">Platform: Windows 11 · Python 3.11 · FastAPI · LangGraph</div>
+</div>
+</div>
+
+<div class="page-break"></div>
+
+<!-- ═══════════════════════════ TABLE OF CONTENTS ══════════════════ -->
+<h1 style="page-break-before:auto">Table of Contents</h1>
+<div class="toc">
+<ol>
+  <li><a href="#ch1">System Overview & Philosophy</a></li>
+  <li><a href="#ch2">Architecture Deep Dive</a></li>
+  <li><a href="#ch3">Data Layer — MarketData</a></li>
+  <li><a href="#ch4">Agent Framework & State Schema</a></li>
+  <li><a href="#ch5">LangGraph Orchestrator</a></li>
+  <li><a href="#ch6">Bayesian Fusion Engine</a></li>
+  <li><a href="#ch7">GARCH Volatility Model</a></li>
+  <li><a href="#ch8">Hidden Markov Model</a></li>
+  <li><a href="#ch9">Monte Carlo Simulation</a></li>
+  <li><a href="#ch10">Quasi-Monte Carlo (Sobol)</a></li>
+  <li><a href="#ch11">Extreme Value Theory</a></li>
+  <li><a href="#ch12">Kalman Filter — Dynamic Beta</a></li>
+  <li><a href="#ch13">Topological Data Analysis</a></li>
+  <li><a href="#ch14">Hawkes Self-Exciting Process</a></li>
+  <li><a href="#ch15">Technical Agent — 30 Factors</a></li>
+  <li><a href="#ch16">Fundamental Agent — 28 Factors</a></li>
+  <li><a href="#ch17">Macro Agent — 26 Factors</a></li>
+  <li><a href="#ch18">Sentiment Agent — 18 Factors</a></li>
+  <li><a href="#ch19">Insider Agent — 14 Factors</a></li>
+  <li><a href="#ch20">Risk Agent — 16 Factors</a></li>
+  <li><a href="#ch21">Geopolitical Agent — 15 Factors</a></li>
+  <li><a href="#ch22">Volatility Agent — 12 Factors</a></li>
+  <li><a href="#ch23">Currency Agent — 12 Factors</a></li>
+  <li><a href="#ch24">Risk Circuit Breakers & Overrides</a></li>
+  <li><a href="#ch25">Dynamic Horizon Weighting</a></li>
+  <li><a href="#ch26">Signal Decay & Holding Period</a></li>
+  <li><a href="#ch27">Settings Configuration Reference</a></li>
+  <li><a href="#ch28">API Reference</a></li>
+  <li><a href="#ch29">Dashboard & Frontend</a></li>
+  <li><a href="#ch30">Backtesting & Walk-Forward</a></li>
+</ol>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch1" class="nobreak">Chapter 1 — System Overview &amp; Philosophy</h2>
+
+<p>AlphaAgent is a multi-agent quantitative trading signal system that combines nine independent analytical perspectives into a single probability-scored trading recommendation. Every signal is produced through a rigorous, mathematically grounded pipeline with full transparency: every factor is scored 0–100, every agent reports its reasoning, and the orchestrator exposes the Bayesian posterior probability, Shannon entropy, and position-sizing multiplier to the end user.</p>
+
+<h3>Design Principles</h3>
+<ul>
+  <li><strong>No black boxes.</strong> Every factor that moves a probability is named, scored, and shown in the dashboard with its raw value and interpretation.</li>
+  <li><strong>Correlation penalty.</strong> Agents that share data sources are penalized in the Bayesian fusion step so that correlated evidence is not double-counted.</li>
+  <li><strong>Hard circuit breakers.</strong> The Risk Agent can override all other agents with a HALT command (position size = 0) when Black Swan, Flash Crash, or Hawkes cascade signals fire.</li>
+  <li><strong>Dynamic confidence.</strong> Each agent passes a <code>confidence</code> weight (0–1) that scales its evidence in the Bayesian update; low-confidence agents contribute less.</li>
+  <li><strong>Time-horizon awareness.</strong> The final probability blend is reweighted by a horizon multiplier map (1D→technical-dominant, 1Y→fundamental-dominant) before delivery to the user.</li>
+</ul>
+
+<h3>Signal Pipeline Summary</h3>
+<div class="formula-box">
+<strong>Step 1:</strong> MarketData fetches OHLCV, fundamentals, options, news, FRED macro in parallel (cached).<br>
+<strong>Step 2:</strong> 9 agents run in parallel via ThreadPoolExecutor. Each returns P(up) ∈ [0,1] + factor scores.<br>
+<strong>Step 3:</strong> Bayesian fusion combines agent probabilities with correlation penalties and confidence weights.<br>
+<strong>Step 4:</strong> Risk circuit breaker applies HALT / size-reduction overrides.<br>
+<strong>Step 5:</strong> HMM regime detection + signal decay half-life computed.<br>
+<strong>Step 6:</strong> Horizon reweighting applied per user-selected time frame.<br>
+<strong>Step 7:</strong> Final SignalPacket returned: direction, P(up), conviction %, entropy, size multiplier.
+</div>
+
+<h3>Factor Count by Agent</h3>
+<table>
+<tr><th>Agent</th><th>Factors</th><th>Data Sources</th><th>Primary Theory</th></tr>
+<tr><td>Technical</td><td>30</td><td>yfinance OHLCV, options chain</td><td>Price action, options microstructure, TDA</td></tr>
+<tr><td>Fundamental</td><td>28</td><td>yfinance financials, FRED</td><td>DCF, Fama-French 5-Factor, CAPM</td></tr>
+<tr><td>Macro</td><td>26</td><td>FRED API, yfinance ETFs</td><td>Yield curve, monetary policy, global breadth</td></tr>
+<tr><td>Sentiment</td><td>18</td><td>NewsAPI, yfinance news, ChromaDB</td><td>NLP RAG, social sentiment, options flow</td></tr>
+<tr><td>Insider</td><td>14</td><td>SEC EDGAR, yfinance, House/Senate Watcher</td><td>Microstructure, Kyle's Lambda, clustering</td></tr>
+<tr><td>Risk</td><td>16</td><td>yfinance OHLCV + options</td><td>EVT, GARCH, Hawkes, Quasi-MC, KL divergence</td></tr>
+<tr><td>Geopolitical</td><td>15</td><td>FRED, yfinance commodities/ETFs</td><td>GPR index, Caldara-Iacoviello, oil signals</td></tr>
+<tr><td>Volatility</td><td>12</td><td>yfinance OHLCV + options</td><td>GARCH, Kalman, IV term structure</td></tr>
+<tr><td>Currency</td><td>12</td><td>yfinance FX pairs, FRED rates</td><td>Carry trade, DXY regime, EM stress</td></tr>
+<tr><td><strong>Total</strong></td><td><strong>171</strong></td><td></td><td></td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch2">Chapter 2 — Architecture Deep Dive</h2>
+
+<h3>Execution Graph (LangGraph)</h3>
+<pre><code>START
+  │
+  ▼
+[data_ingestion_node]
+  Pre-warms: OHLCV(1y), financials, info, news
+  │
+  ▼
+[run_agents_node]   ← ThreadPoolExecutor(max_workers=9)
+  ├── TechnicalAgent.analyze()
+  ├── FundamentalAgent.analyze()
+  ├── MacroAgent.analyze()
+  ├── SentimentAgent.analyze()
+  ├── InsiderAgent.analyze()
+  ├── RiskAgent.analyze()
+  ├── GeopoliticalAgent.analyze()
+  ├── VolatilityAgent.analyze()
+  └── CurrencyAgent.analyze()
+  │
+  ▼
+[portfolio_manager_node]
+  Risk circuit breaker check
+  BayesianFusion.update() × 8 agents (risk excluded)
+  HMM regime detection
+  SignalDecay half-life
+  Build SignalPacket
+  │
+  ▼
+END → HTTP Response</code></pre>
+
+<h3>Module Dependencies</h3>
+<table>
+<tr><th>Module</th><th>Imports From</th><th>Purpose</th></tr>
+<tr><td><code>api/main.py</code></td><td>orchestrator, agents, database</td><td>FastAPI HTTP layer, horizon weighting</td></tr>
+<tr><td><code>orchestrator/graph.py</code></td><td>agents.*, quant_engine.bayesian, quant_engine.hmm</td><td>LangGraph workflow compilation</td></tr>
+<tr><td><code>agents/*.py</code></td><td>data.market, quant_engine.*, config.settings_manager</td><td>9 individual analysis agents</td></tr>
+<tr><td><code>quant_engine/*.py</code></td><td>scipy, numpy, arch, hmmlearn, ripser</td><td>Mathematical computation kernels</td></tr>
+<tr><td><code>data/market.py</code></td><td>yfinance, fredapi, chromadb</td><td>Cached data access layer</td></tr>
+<tr><td><code>database/manager.py</code></td><td>sqlalchemy, sqlite3</td><td>Trade/signal persistence</td></tr>
+<tr><td><code>frontend/index.html</code></td><td>(self-contained)</td><td>Single-file dashboard</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch3">Chapter 3 — Data Layer (MarketData)</h2>
+
+<p>The <code>MarketData</code> class in <code>data/market.py</code> is the single data access point for all agents. It wraps <code>yfinance</code> and <code>fredapi</code> with in-memory TTL caching to prevent redundant API calls during a single analysis run.</p>
+
+<h3>Key Methods</h3>
+<table>
+<tr><th>Method</th><th>Returns</th><th>Cache TTL</th><th>Source</th></tr>
+<tr><td><code>get_ohlcv(period)</code></td><td>DataFrame: Open/High/Low/Close/Volume</td><td>300s</td><td>yfinance</td></tr>
+<tr><td><code>get_returns(period)</code></td><td>Series: log returns</td><td>300s</td><td>yfinance (derived)</td></tr>
+<tr><td><code>get_financials()</code></td><td>Dict: income/balance/cashflow</td><td>604800s (1w)</td><td>yfinance</td></tr>
+<tr><td><code>get_info()</code></td><td>Dict: ticker metadata</td><td>86400s (1d)</td><td>yfinance</td></tr>
+<tr><td><code>get_options()</code></td><td>Dict: calls/puts DataFrames per expiry</td><td>300s</td><td>yfinance options chain</td></tr>
+<tr><td><code>get_news()</code></td><td>List[Dict]: recent headlines</td><td>1800s</td><td>yfinance + NewsAPI</td></tr>
+<tr><td><code>get_fred(series_id)</code></td><td>Series: macro time series</td><td>3600s</td><td>FRED API (fredapi)</td></tr>
+</table>
+
+<h3>Data Pre-warming</h3>
+<p>The <code>data_ingestion_node</code> calls <code>get_ohlcv("1y")</code>, <code>get_financials()</code>, and <code>get_info()</code> before agents start. This ensures all agents share one API call instead of each making their own, reducing latency from ~90s to ~30–60s.</p>
+
+<h3>yfinance Multi-Index Fix</h3>
+<div class="warn-box">
+<strong>Critical Bug (fixed):</strong> yfinance ≥0.2 returns a MultiIndex column DataFrame when downloading with <code>group_by="ticker"</code>. All agents use <code>df.columns = df.columns.get_level_values(0)</code> to flatten the MultiIndex before accessing columns like <code>"Close"</code>.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch4">Chapter 4 — Agent Framework &amp; State Schema</h2>
+
+<h3>Core Data Classes (agents/state.py)</h3>
+
+<h4>FactorScore</h4>
+<pre><code>@dataclass
+class FactorScore:
+    name: str            # Display name, e.g. "RSI (14)"
+    value: float         # Raw computed value (e.g. 72.3)
+    score: float         # Normalized 0–100 (50 = neutral, 100 = maximum bullish)
+    interpretation: str  # Plain-English explanation</code></pre>
+
+<p>The <strong>score</strong> convention: values near 0 are bearish, values near 100 are bullish, 50 is neutral. The composite agent probability is derived by averaging all factor scores and mapping [0,100] → [0,1].</p>
+
+<h4>AgentResult</h4>
+<pre><code>@dataclass
+class AgentResult:
+    agent_name: str                    # Unique agent identifier
+    vote: Direction                    # LONG | SHORT | HOLD
+    probability_up: float              # P(price up) ∈ [0.0, 1.0]
+    confidence: float                  # Confidence in this estimate ∈ [0.0, 1.0]
+    reasoning: str                     # Narrative explanation
+    factor_scores: dict[str, FactorScore]
+    warnings: list[str]
+    computation_time_ms: float
+    timestamp: datetime</code></pre>
+
+<h4>SignalPacket</h4>
+<pre><code>@dataclass
+class SignalPacket:
+    ticker: str
+    direction: Direction               # Final vote
+    conviction_pct: float              # |P(up) - 0.5| × 2 × 100
+    confidence: Confidence             # HIGH/MEDIUM/LOW enum
+    agent_results: list[AgentResult]   # All 9 agent outputs
+    regime: RegimeResult               # HMM regime
+    holding_period: HoldingPeriod      # Signal decay half-life
+    override_active: bool
+    override_reason: str
+    warnings: list[str]</code></pre>
+
+<h4>HoldingPeriod</h4>
+<pre><code>@dataclass
+class HoldingPeriod:
+    half_life_days: float       # Signal half-life (Ornstein-Uhlenbeck mean reversion)
+    optimal_hold_min: int       # Recommended minimum hold (days)
+    optimal_hold_max: int       # Recommended maximum hold (days)
+    signal_strength: float      # [0,1] — affects recommended size</code></pre>
+
+<h3>Direction Enums</h3>
+<table>
+<tr><th>Enum</th><th>Values</th></tr>
+<tr><td><code>Direction</code></td><td>LONG, SHORT, HOLD, NEUTRAL</td></tr>
+<tr><td><code>Confidence</code></td><td>HIGH (conviction>0.4), MEDIUM (>0.2), LOW</td></tr>
+<tr><td><code>Regime</code></td><td>BULL, BEAR, CRISIS, SIDEWAYS</td></tr>
+<tr><td><code>VolRegime</code></td><td>LOW, NORMAL, HIGH, EXTREME</td></tr>
+</table>
+
+<h3>BaseAgent Interface</h3>
+<pre><code>class BaseAgent(ABC):
+    name: str  # Must be set in subclass
+
+    def run(self, ticker: str, market_data: MarketData) -> AgentResult:
+        """Public entry point. Times execution, catches all exceptions."""
+        t0 = time.time()
+        try:
+            result = self.analyze(ticker, market_data)
+            result.agent_name = self.name
+            result.computation_time_ms = (time.time() - t0) * 1000
+            return result
+        except Exception as e:
+            return AgentResult(agent_name=self.name, vote=Direction.HOLD,
+                               probability_up=0.5, confidence=0.0,
+                               reasoning=f"AGENT FAILURE: {e}")
+
+    @abstractmethod
+    def analyze(self, ticker: str, market_data: MarketData) -> AgentResult:
+        """Override this to implement the agent logic."""</code></pre>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch5">Chapter 5 — LangGraph Orchestrator</h2>
+
+<h3>Node 1: data_ingestion_node</h3>
+<p>Pre-warms the MarketData cache. Calls <code>get_ohlcv("1y")</code>, <code>get_financials()</code>, <code>get_info()</code>, and fetches news. Because all results are cached in-process, subsequent agent calls to these methods return instantly from cache.</p>
+
+<h3>Node 2: run_agents_node</h3>
+<p>Uses Python's <code>ThreadPoolExecutor</code> with up to 9 workers to run all registered agents in parallel. Each agent gets its own thread. Results are collected via <code>as_completed()</code> futures. If any agent raises an exception, it is caught and replaced with a neutral <code>AgentResult(probability_up=0.5)</code>.</p>
+
+<h3>Node 3: portfolio_manager_node</h3>
+<p>This is the aggregation brain. It performs six sequential operations:</p>
+
+<ol>
+  <li><strong>Risk circuit breaker check</strong> — reads Risk Agent reasoning text for keywords: <code>CRITICAL RISK</code>, <code>BLACK SWAN</code>, <code>FLASH CRASH</code> → sets <code>multiplier = 0.0</code>, <code>direction = HOLD</code>. <code>HIGH RISK</code> → <code>multiplier = 0.5</code>. <code>GEO_SHOCK</code> → <code>multiplier ≤ 0.35</code>.</li>
+  <li><strong>Bayesian fusion</strong> — feeds 8 agent probabilities (risk excluded) into BayesianFusion with correlation penalties. See Chapter 6.</li>
+  <li><strong>Direction assignment</strong> — <code>P(up) > 0.55 → LONG</code>, <code>P(up) < 0.45 → SHORT</code>, else <code>HOLD</code>.</li>
+  <li><strong>Conviction calculation</strong> — <code>conviction = |P(up) − 0.5| × 2</code> (range: 0=neutral to 1=max).</li>
+  <li><strong>HMM regime detection</strong> — fits 3-state Gaussian HMM to 1-year returns. Labels current market as BULL/BEAR/CRISIS.</li>
+  <li><strong>Signal decay</strong> — estimates holding period via Ornstein-Uhlenbeck half-life of price reversion.</li>
+</ol>
+
+<h3>Correlation Map (double-counting prevention)</h3>
+<table>
+<tr><th>Agent</th><th>Correlation Penalty</th><th>Reason</th></tr>
+<tr><td>sentiment</td><td>0.20</td><td>Partly overlaps with news used by macro</td></tr>
+<tr><td>volatility</td><td>0.40</td><td>Highly overlaps with risk agent's GARCH</td></tr>
+<tr><td>geopolitical</td><td>0.25</td><td>Partly overlaps with macro's global breadth</td></tr>
+<tr><td>currency</td><td>0.20</td><td>Partly overlaps with macro's DXY regime</td></tr>
+<tr><td>technical, fundamental, macro, insider</td><td>0.00</td><td>Independent data sources</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch6">Chapter 6 — Bayesian Fusion Engine</h2>
+
+<p>Source: <code>quant_engine/bayesian.py</code></p>
+
+<h3>Theory</h3>
+<p>Standard probability averaging ignores evidence strength and correlation. Bayesian Fusion operates in <strong>log-odds space</strong> where each agent's probability is converted to a log-odds (logit) and the contributions are summed — this is the correct Bayesian sequential update rule for independent evidence.</p>
+
+<h3>Mathematical Formulation</h3>
+<div class="formula-box">
+<strong>Initialization:</strong>
+\[ \text{LogOdds}_0 = \ln\!\left(\frac{\pi_0}{1 - \pi_0}\right) \]
+where \(\pi_0 = 0.5\) (uniform prior: no directional bias before evidence).
+
+<br><br><strong>Evidence from agent \(i\):</strong>
+\[ E_i = \ln\!\left(\frac{p_i}{1 - p_i}\right) \cdot c_i \cdot (1 - \rho_i) \]
+where \(p_i\) = agent probability, \(c_i\) = confidence weight, \(\rho_i\) = correlation penalty.
+
+<br><br><strong>Sequential update:</strong>
+\[ \text{LogOdds}_k = \text{LogOdds}_{k-1} + E_k \]
+
+<br><strong>Posterior conversion (sigmoid):</strong>
+\[ P(\text{up}) = \frac{1}{1 + e^{-\text{LogOdds}_\text{final}}} \]
+</div>
+
+<h3>Shannon Entropy</h3>
+<div class="formula-box">
+\[ H = -\left[p \log_2 p + (1-p) \log_2(1-p)\right] \]
+<ul>
+  <li>\(H = 0.0\): Perfect certainty (p = 0 or p = 1)</li>
+  <li>\(H = 1.0\): Total confusion (p = 0.5)</li>
+  <li>AlphaAgent warns when \(H > 0.9\): agents strongly disagree</li>
+</ul>
+</div>
+
+<h3>Worked Example</h3>
+<p>Suppose technical agent reports p=0.72 (bullish) with confidence=0.9, no correlation. Macro agent reports p=0.48 (slightly bearish) with confidence=0.7, correlation=0.0. Sentiment reports p=0.65 with confidence=0.6, correlation=0.20.</p>
+<pre><code>Prior log-odds:     ln(0.5/0.5)    = 0.000
+Technical:          ln(0.72/0.28) × 0.9 × 1.0 = 0.942 × 0.9 = +0.848
+Macro:              ln(0.48/0.52) × 0.7 × 1.0 = −0.167 × 0.7 = −0.117
+Sentiment:          ln(0.65/0.35) × 0.6 × 0.8 = 0.619 × 0.48 = +0.297
+Final log-odds:     0.000 + 0.848 − 0.117 + 0.297 = 1.028
+Posterior P(up):    1 / (1 + exp(−1.028)) = 0.736 → LONG</code></pre>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch7">Chapter 7 — GARCH Volatility Model</h2>
+
+<p>Source: <code>quant_engine/garch.py</code> · Library: <code>arch</code></p>
+
+<h3>Theory</h3>
+<p>GARCH (Generalized Autoregressive Conditional Heteroskedasticity) models the fact that financial volatility clusters — high-volatility days tend to follow high-volatility days. Unlike historical volatility which assumes constant vol, GARCH forecasts <em>tomorrow's</em> volatility based on recent shocks and the persistence of variance.</p>
+
+<h3>GARCH(1,1) Equation</h3>
+<div class="formula-box">
+<strong>Return equation:</strong>
+\[ r_t = \mu + \epsilon_t, \quad \epsilon_t = \sigma_t z_t, \quad z_t \sim N(0,1) \]
+
+<strong>Variance equation:</strong>
+\[ \sigma_t^2 = \omega + \alpha \epsilon_{t-1}^2 + \beta \sigma_{t-1}^2 \]
+
+<strong>Parameters:</strong>
+<ul>
+  <li>\(\omega\) (omega): Long-run variance constant</li>
+  <li>\(\alpha\) (alpha[1]): News impact — how much last period's shock affects today's variance</li>
+  <li>\(\beta\) (beta[1]): Persistence — how much last period's variance persists today</li>
+</ul>
+
+<strong>Persistence:</strong> \(\alpha + \beta < 1\) for stationarity. Close to 1 = long memory.
+
+<br><br><strong>Long-run (unconditional) volatility:</strong>
+\[ \sigma_\infty = \sqrt{\frac{\omega}{1 - \alpha - \beta}} \]
+
+<strong>Annualized from daily:</strong>
+\[ \sigma_\text{ann} = \sigma_\text{daily} \times \sqrt{252} \times 100 \]
+</div>
+
+<h3>Multi-Step Forecast</h3>
+<div class="formula-box">
+For horizon \(h\), GARCH variance forecast converges to the long-run variance:
+\[ \hat{\sigma}_{t+h}^2 = \sigma_\infty^2 + (\alpha+\beta)^{h-1}(\sigma_{t+1}^2 - \sigma_\infty^2) \]
+
+5-day aggregated volatility:
+\[ \sigma_{5d} = \sqrt{\sum_{j=1}^{5} \hat{\sigma}_{t+j}^2} \]
+</div>
+
+<h3>Regime Classification</h3>
+<table>
+<tr><th>Regime</th><th>Vol Percentile</th><th>Meaning</th></tr>
+<tr><td>LOW</td><td>&lt; 25th</td><td>Calm market, signals more reliable</td></tr>
+<tr><td>NORMAL</td><td>25th–75th</td><td>Average vol environment</td></tr>
+<tr><td>HIGH</td><td>75th–95th</td><td>Elevated volatility, wider stops needed</td></tr>
+<tr><td>EXTREME</td><td>&gt; 95th</td><td>Crisis-level vol, reduce position size</td></tr>
+</table>
+
+<h3>GARCHResult Fields</h3>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>vol_1day</code></td><td>float</td><td>1-day ahead annualized vol forecast (%)</td></tr>
+<tr><td><code>vol_5day</code></td><td>float</td><td>5-day aggregated annualized vol (%)</td></tr>
+<tr><td><code>vol_10day</code></td><td>float</td><td>10-day aggregated annualized vol (%)</td></tr>
+<tr><td><code>current_vol</code></td><td>float</td><td>Most recent realized conditional vol (%)</td></tr>
+<tr><td><code>vol_percentile</code></td><td>float</td><td>Percentile rank of current vol vs history</td></tr>
+<tr><td><code>vol_regime</code></td><td>str</td><td>LOW / NORMAL / HIGH / EXTREME</td></tr>
+<tr><td><code>alpha</code></td><td>float</td><td>News impact coefficient</td></tr>
+<tr><td><code>beta</code></td><td>float</td><td>Variance persistence coefficient</td></tr>
+<tr><td><code>persistence</code></td><td>float</td><td>α + β (must be &lt; 1)</td></tr>
+<tr><td><code>aic</code> / <code>bic</code></td><td>float</td><td>Model information criteria (lower=better)</td></tr>
+</table>
+
+<h3>Implementation Note</h3>
+<p>Returns are scaled by 100 (percentage) before fitting because the <code>arch</code> library is numerically more stable when the scale of returns is ~1–5 rather than 0.01–0.05. All outputs are divided back by the scale factor before reporting.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch8">Chapter 8 — Hidden Markov Model (Regime Detection)</h2>
+
+<p>Source: <code>quant_engine/hmm.py</code> · Library: <code>hmmlearn</code></p>
+
+<h3>Theory</h3>
+<p>Markets cycle through unobservable (hidden) states — Bull, Bear, Crisis — which manifest as different return distributions. A Gaussian HMM learns these states unsupervised from return data: each state has a characteristic mean return and volatility. The model then assigns a probability to each state for the current period.</p>
+
+<h3>Model Specification</h3>
+<div class="formula-box">
+<strong>3-state Gaussian HMM:</strong>
+\[ P(r_t | S_t = k) = \mathcal{N}(\mu_k, \sigma_k^2) \]
+
+<strong>Transition matrix \(A\):</strong>
+\[ A_{ij} = P(S_t = j | S_{t-1} = i) \]
+
+<strong>State assignment:</strong> States are sorted by conditional volatility:
+<ul>
+  <li>State 0 (lowest σ) → BULL regime</li>
+  <li>State 1 (medium σ) → BEAR regime</li>
+  <li>State 2 (highest σ) → CRISIS regime</li>
+</ul>
+
+<strong>Posterior probabilities via Forward-Backward algorithm:</strong>
+\[ \gamma_t(k) = P(S_t = k | r_1, \ldots, r_T) \]
+</div>
+
+<h3>RegimeResult Fields</h3>
+<table>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr><td><code>current_regime</code></td><td>str</td><td>BULL / BEAR / CRISIS</td></tr>
+<tr><td><code>probabilities</code></td><td>dict</td><td>{bull: 0.72, bear: 0.21, crisis: 0.07}</td></tr>
+<tr><td><code>transition_risk</code></td><td>dict</td><td>{to_bear: 0.15, to_crisis: 0.03}</td></tr>
+<tr><td><code>state_means</code></td><td>list[float]</td><td>Daily return mean per state (sorted by vol)</td></tr>
+<tr><td><code>state_vols</code></td><td>list[float]</td><td>Daily return std per state (sorted)</td></tr>
+<tr><td><code>regime_duration_days</code></td><td>int</td><td>Consecutive days in current regime</td></tr>
+</table>
+
+<h3>Usage in Orchestrator</h3>
+<p>The HMM is run in <code>portfolio_manager_node</code> on 1-year of daily returns. The resulting <code>RegimeResult</code> is stored in the <code>SignalPacket.regime</code> field and displayed in the dashboard's regime card. It does <em>not</em> modify the probability directly — it provides regime context for the analyst.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch9">Chapter 9 — Monte Carlo Simulation (GBM)</h2>
+
+<p>Source: <code>quant_engine/monte_carlo.py</code></p>
+
+<h3>Geometric Brownian Motion</h3>
+<div class="formula-box">
+<strong>Continuous-time SDE:</strong>
+\[ dS = \mu S\,dt + \sigma S\,dW_t \]
+
+<strong>Discretized Euler-Maruyama (Itô form):</strong>
+\[ S_{t+1} = S_t \cdot \exp\!\left[\left(\mu - \frac{\sigma^2}{2}\right)\Delta t + \sigma\sqrt{\Delta t}\,Z_t\right] \]
+where \(Z_t \sim N(0,1)\), \(\Delta t = 1\) (daily), \(\mu\) = daily drift, \(\sigma\) = daily volatility.
+
+<strong>Why the \(-\sigma^2/2\) adjustment (Itô correction)?</strong>
+Without it, \(E[S_t]\) would be biased upward. The adjustment ensures \(E[S_T] = S_0 e^{\mu T}\).
+</div>
+
+<h3>Implementation (Vectorized)</h3>
+<pre><code># Generate all shocks at once: shape (days, num_paths)
+Z = np.random.standard_normal((days, num_paths))
+drift_adj = drift_daily - 0.5 * vol_daily**2
+daily_returns = np.exp(drift_adj + vol_daily * Z)
+cum_returns = np.cumprod(daily_returns, axis=0)   # Cumulative product per path
+final_prices = current_price * cum_returns[-1, :] # Last day × num_paths</code></pre>
+
+<h3>GARCH-Dynamic Version</h3>
+<p>Instead of constant vol, each day \(t\) uses GARCH-forecasted volatility \(\hat{\sigma}_t\):</p>
+<pre><code>for t in range(1, days + 1):
+    vol_t = garch_forecasts[t-1]   # Day-specific GARCH forecast
+    drift_adj = drift_daily - 0.5 * vol_t**2
+    paths[t] = paths[t-1] * np.exp(drift_adj + vol_t * Z[t-1])</code></pre>
+
+<h3>Confidence Intervals</h3>
+<table>
+<tr><th>CI Level</th><th>Percentiles Used</th><th>Interpretation</th></tr>
+<tr><td>68% (1σ)</td><td>[16th, 84th]</td><td>1 standard deviation range</td></tr>
+<tr><td>95% (2σ)</td><td>[2.5th, 97.5th]</td><td>Standard 95% confidence band</td></tr>
+<tr><td>99% (3σ)</td><td>[0.5th, 99.5th]</td><td>Extreme scenario range</td></tr>
+</table>
+
+<h3>MonteCarloResult Fields</h3>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td><code>prob_above_current</code></td><td>% of 10,000 paths ending above entry price</td></tr>
+<tr><td><code>expected_return_pct</code></td><td>Mean return across all paths (%)</td></tr>
+<tr><td><code>ci_95</code></td><td>ConfidenceInterval(low=…, high=…) in dollars</td></tr>
+<tr><td><code>max_simulated_price</code></td><td>Worst-case tail upside across all paths</td></tr>
+<tr><td><code>min_simulated_price</code></td><td>Worst-case tail downside across all paths</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch10">Chapter 10 — Quasi-Monte Carlo (Sobol Sequences)</h2>
+
+<p>Source: <code>quant_engine/quasi_mc.py</code> · Library: <code>scipy.stats.qmc.Sobol</code></p>
+
+<h3>Why QMC?</h3>
+<p>Standard pseudorandom Monte Carlo converges at the <em>probabilistic</em> rate \(O(N^{-1/2})\). Quasi-random sequences (Sobol, Halton) use a structured low-discrepancy design that fills the sample space more uniformly, achieving the <em>deterministic</em> rate \(O((\log N)^d / N)\). In practice this means 10–100× tighter confidence intervals for the same number of paths.</p>
+
+<h3>Sobol Sequence Construction</h3>
+<div class="formula-box">
+Sobol sequences are based on <strong>Van der Corput sequences</strong> in base 2, extended to multi-dimensional spaces via direction numbers (Joe &amp; Kuo 2003). Each dimension is a binary reflected Gray code sequence that minimizes the <em>star discrepancy</em>:
+\[ D^*_N = \sup_{[0,1]^d} \left| \frac{\#\{x_i \in B\}}{N} - \text{Vol}(B) \right| \]
+
+Implementation: <code>scipy.stats.qmc.Sobol(d=days, scramble=True)</code> generates an \((N \times d)\) uniform matrix which is then transformed via the inverse normal CDF to produce quasi-normal shocks:
+\[ Z_{ij} = \Phi^{-1}(u_{ij}), \quad u_{ij} \in \text{Sobol}(N, d) \]
+</div>
+
+<h3>Efficiency Comparison</h3>
+<table>
+<tr><th>Method</th><th>Convergence Rate</th><th>Effective Sample Size</th><th>Tighter CIs?</th></tr>
+<tr><td>Pseudorandom MC</td><td>\(O(N^{-1/2})\)</td><td>N</td><td>Baseline</td></tr>
+<tr><td>Sobol QMC</td><td>\(O((\log N)^d/N)\)</td><td>~10N (empirical)</td><td>Yes, ~3× narrower</td></tr>
+</table>
+
+<h3>Power-of-2 Requirement</h3>
+<p>Sobol sequences achieve maximum uniformity guarantees when the number of paths \(N\) is a power of 2. AlphaAgent automatically rounds up: <code>_round_to_power2(n)</code>. Default: 4096 paths (= 2¹²).</p>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch11">Chapter 11 — Extreme Value Theory (EVT)</h2>
+
+<p>Source: <code>quant_engine/evt.py</code> · Libraries: <code>scipy.stats.genpareto</code>, <code>scipy.stats.genextreme</code></p>
+
+<h3>Overview</h3>
+<p>Standard VaR assumes returns are normally distributed — but financial returns have fat tails. EVT focuses exclusively on the tail of the distribution using two rigorous approaches: Peaks-Over-Threshold (POT) with a Generalized Pareto Distribution, and Block Maxima with a Generalized Extreme Value distribution.</p>
+
+<h3>Method 1: POT — Generalized Pareto Distribution</h3>
+<div class="formula-box">
+<strong>Automatic threshold selection (Mean Excess Function):</strong>
+The optimal threshold \(u^*\) is selected where the Mean Excess Function \(e(u) = E[X - u | X > u]\) is most linear (low curvature), indicating the GPD assumption is valid.
+
+<strong>GPD fit:</strong> For exceedances \(y_i = x_i - u^*\) (losses above threshold):
+\[ P(Y \leq y) = 1 - \left(1 + \frac{\xi y}{\sigma}\right)^{-1/\xi} \]
+where \(\xi\) = shape (tail index), \(\sigma\) = scale.
+
+<strong>VaR formula (POT):</strong>
+\[ \text{VaR}_p = u^* + \frac{\sigma}{\xi}\left[\left(\frac{1-p}{\bar{F}(u^*)}\right)^{-\xi} - 1\right] \]
+
+<strong>CVaR (Expected Shortfall):</strong>
+\[ \text{CVaR}_p = \frac{\text{VaR}_p + \sigma - \xi u^*}{1 - \xi} \]
+
+<strong>Fat tail warning:</strong> If \(\xi > 0.5\), the variance is theoretically infinite. AlphaAgent warns: "Extremely fat tails — Black Swan risk."
+</div>
+
+<h3>Method 2: Block Maxima — GEV Distribution</h3>
+<div class="formula-box">
+Divide the return series into non-overlapping blocks of 21 trading days. Take the maximum loss in each block. Fit a Generalized Extreme Value (GEV) distribution:
+\[ P(M_n \leq x) = \exp\!\left[-\left(1 + \xi\frac{x-\mu}{\sigma}\right)^{-1/\xi}\right] \]
+
+<strong>GEV VaR:</strong>
+\[ \text{VaR}_p^{\text{GEV}} = \mu + \frac{\sigma}{\xi}\left[(-\log p)^{-\xi} - 1\right] \]
+
+GEV is used as a cross-check against the POT estimate. Divergence between the two signals model instability.
+</div>
+
+<h3>Tail Dependence Coefficient (\(\lambda_L\))</h3>
+<div class="formula-box">
+Measures the probability that the stock crashes given the market (SPY) crashes simultaneously. Uses an empirical (non-parametric) estimator:
+\[ \hat{\lambda}_L = \frac{\#\{X_t < Q_q(X) \text{ and } B_t < Q_q(B)\}}{\#\{B_t < Q_q(B)\}} \]
+where \(q = 0.05\) (worst 5% of market returns). Values near 1 mean the stock always crashes with the market. AlphaAgent warns when \(\lambda_L > 0.5\).
+</div>
+
+<h3>EVTResult Fields</h3>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td><code>var_95</code></td><td>GPD 95% Value at Risk (negative = loss)</td></tr>
+<tr><td><code>var_99</code></td><td>GPD 99% VaR</td></tr>
+<tr><td><code>cvar_95</code></td><td>GPD Expected Shortfall at 95%</td></tr>
+<tr><td><code>cvar_99</code></td><td>GPD Expected Shortfall at 99%</td></tr>
+<tr><td><code>gev_var_95</code></td><td>GEV Block Maxima 95% VaR (cross-check)</td></tr>
+<tr><td><code>tail_index</code></td><td>GPD shape ξ: positive = fat tails</td></tr>
+<tr><td><code>tail_dependence</code></td><td>λ_L co-crash probability with SPY [0,1]</td></tr>
+<tr><td><code>n_tail_events</code></td><td>Exceedances used for GPD fit</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch12">Chapter 12 — Kalman Filter (Dynamic Beta)</h2>
+
+<p>Source: <code>quant_engine/kalman.py</code></p>
+
+<h3>Theory</h3>
+<p>Static OLS regression produces a single beta coefficient over the entire historical window. But betas change over time — a stock's sensitivity to the market shifts with macroeconomic regime, sector rotation, and company-specific events. The Kalman Filter treats beta as a latent state that evolves as a random walk and updates it optimally given new price data.</p>
+
+<h3>State-Space Formulation</h3>
+<div class="formula-box">
+<strong>State vector:</strong> \(\theta_t = [\alpha_t, \beta_t]^\top\) (intercept + slope)
+
+<strong>Observation equation:</strong>
+\[ r_{\text{stock},t} = \alpha_t + \beta_t \cdot r_{\text{SPY},t} + \epsilon_t, \quad \epsilon_t \sim N(0, R) \]
+
+<strong>State transition (random walk):</strong>
+\[ \theta_t = \theta_{t-1} + \eta_t, \quad \eta_t \sim N(0, Q) \]
+
+where \(Q = \frac{\delta}{1-\delta} I_2\) controls how quickly beta is allowed to change (\(\delta = 10^{-4}\) by default — slow drift).
+</div>
+
+<h3>Kalman Recursion</h3>
+<div class="formula-box">
+<strong>Predict:</strong>
+\[ \hat{\theta}_{t|t-1} = \theta_{t-1}, \quad P_{t|t-1} = P_{t-1} + Q \]
+
+<strong>Innovation:</strong>
+\[ \nu_t = r_{\text{stock},t} - H_t \hat{\theta}_{t|t-1}, \quad H_t = [1, r_{\text{SPY},t}] \]
+
+<strong>Kalman Gain:</strong>
+\[ K_t = P_{t|t-1} H_t^\top (H_t P_{t|t-1} H_t^\top + R)^{-1} \]
+
+<strong>Update:</strong>
+\[ \theta_t = \hat{\theta}_{t|t-1} + K_t \nu_t \]
+\[ P_t = (I - K_t H_t) P_{t|t-1} \]
+</div>
+
+<h3>KalmanResult Fields</h3>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td><code>beta</code></td><td>Current dynamic beta (time-varying market sensitivity)</td></tr>
+<tr><td><code>alpha</code></td><td>Current dynamic alpha (idiosyncratic daily return)</td></tr>
+<tr><td><code>spy_correlation</code></td><td>Rolling 60-day correlation with SPY</td></tr>
+<tr><td><code>beta_series</code></td><td>Full historical time series of beta (for plotting)</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch13">Chapter 13 — Topological Data Analysis (TDA)</h2>
+
+<p>Source: <code>quant_engine/tda_signal.py</code> · Library: <code>ripser</code> (C++ persistent homology)</p>
+
+<h3>Theory</h3>
+<p>TDA applies algebraic topology to detect the "shape" of financial data that standard statistical measures miss. Persistent homology tracks how topological features (connected components = H0, loops = H1) appear and disappear as a filtration scale parameter grows. Long-lived features are "persistent" and considered genuine structure.</p>
+
+<h3>Pipeline</h3>
+<div class="formula-box">
+<strong>Step 1 — Takens Delay Embedding:</strong>
+Reconstruct a high-dimensional attractor from the 1D return series using delay coordinates:
+\[ \mathbf{x}_i = (r_i, r_{i+\tau}, r_{i+2\tau}, \ldots, r_{i+(d-1)\tau}) \in \mathbb{R}^d \]
+Default: \(d = 3\) (dimension), \(\tau = 2\) (lag). Normalized to \([0,1]^d\).
+
+<strong>Step 2 — Vietoris-Rips Complex:</strong>
+Build a simplicial complex by connecting points within distance \(\epsilon\). Grow \(\epsilon\) from 0 to max. Track birth and death of holes.
+
+<strong>Step 3 — Persistent Homology:</strong>
+<ul>
+  <li>H0 barcodes: connected components (birth when cluster forms, death when merged)</li>
+  <li>H1 barcodes: loops (birth when loop forms, death when filled)</li>
+  <li>Lifetime = death − birth</li>
+</ul>
+
+<strong>Step 4 — Signal derivation:</strong>
+\[ \text{TDA Signal} = \begin{cases} -h_{1,\text{norm}} & \text{if } h_1 > 0.6 \text{ or Betti}_1 \geq 3 \quad (\text{CYCLIC}) \\ 0 & \text{if entropy} > 0.7 \quad (\text{FRAGMENTED}) \\ +1 & \text{if } h_1 < 0.2 \text{ and entropy} < 0.4 \quad (\text{TRENDING}) \end{cases} \]
+</div>
+
+<h3>Regime Labels</h3>
+<table>
+<tr><th>Label</th><th>H1 max</th><th>H0 entropy</th><th>Signal</th><th>Trading Implication</th></tr>
+<tr><td>TRENDING</td><td>Low</td><td>Low</td><td>+1.0</td><td>Momentum strategies work — price moves directionally</td></tr>
+<tr><td>CYCLIC</td><td>High</td><td>Any</td><td>−H1</td><td>Mean-reversion strategies work — price loops around attractor</td></tr>
+<tr><td>FRAGMENTED</td><td>Low</td><td>High</td><td>0.0</td><td>Regime transition — no clear directional or reverting bias</td></tr>
+<tr><td>NEUTRAL</td><td>Mixed</td><td>Mixed</td><td>Interpolated</td><td>Moderate trend/cycle mix</td></tr>
+</table>
+
+<h3>TDAResult Fields</h3>
+<table>
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td><code>h0_max_persistence</code></td><td>Max lifetime of connected components</td></tr>
+<tr><td><code>h1_max_persistence</code></td><td>Max lifetime of 1-cycles (loops)</td></tr>
+<tr><td><code>h0_persistence_entropy</code></td><td>Shannon entropy of H0 diagram (fragmentation measure)</td></tr>
+<tr><td><code>betti_0</code></td><td>H0 features at mid-scale (connected components surviving)</td></tr>
+<tr><td><code>betti_1</code></td><td>H1 features at mid-scale (loops surviving)</td></tr>
+<tr><td><code>tda_signal</code></td><td>[−1, +1]: +1=trending, −1=cyclic/mean-reverting</td></tr>
+<tr><td><code>regime_label</code></td><td>TRENDING / CYCLIC / FRAGMENTED / NEUTRAL</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<h2 id="ch14">Chapter 14 — Hawkes Self-Exciting Process</h2>
+
+<p>Source: <code>quant_engine/hawkes.py</code></p>
+
+<h3>Theory</h3>
+<p>In a Hawkes process, each event increases the probability of further events — the process is self-exciting. In finance, a large price move (event) begets further large moves via informed trader responses, stop-loss cascades, and market maker hedging. A branching ratio approaching 1 signals that each event triggers nearly one child event — the process is explosive.</p>
+
+<h3>Exponential Hawkes Process</h3>
+<div class="formula-box">
+<strong>Conditional intensity:</strong>
+\[ \lambda(t) = \mu + \alpha \sum_{t_i < t} e^{-\beta(t - t_i)} \]
+
+<strong>Parameters:</strong>
+<ul>
+  <li>\(\mu\) = background rate (baseline event frequency per day)</li>
+  <li>\(\alpha\) = excitation magnitude (each event's triggering strength)</li>
+  <li>\(\beta\) = decay rate (how fast excitement fades)</li>
+  <li>\(\alpha/\beta\) = branching ratio \(n\) (must be \(< 1\) for stationarity)</li>
+</ul>
+
+<strong>Event definition:</strong> Returns exceeding \(\pm 1.5\sigma\) (configurable) are extracted as events, converting the continuous return series to a point process \(\{t_1, t_2, \ldots, t_N\}\).
+</div>
+
+<h3>MLE Fitting (Ozaki 1979)</h3>
+<div class="formula-box">
+<strong>Log-likelihood:</strong>
+\[ \ell(\mu, \alpha, \beta) = \sum_{i=1}^N \log\lambda(t_i) - \int_0^T \lambda(t)\,dt \]
+
+<strong>Integral term (closed-form via recursion):</strong>
+\[ \int_0^T \lambda(t)\,dt = \mu T + \frac{\alpha}{\beta}\sum_{i=1}^N \left(1 - e^{-\beta(T-t_i)}\right) \]
+
+<strong>Recursive A_i (efficient computation):</strong>
+\[ A_i = e^{-\beta(t_i - t_{i-1})}(1 + A_{i-1}), \quad \lambda(t_i) = \mu + \alpha A_i \]
+
+Optimizer: SLSQP with constraint \(\beta > \alpha\) (guarantees branching ratio &lt; 1 at convergence).
+</div>
+
+<h3>Cascade Risk Classification</h3>
+<table>
+<tr><th>Branching Ratio</th><th>Level</th><th>Interpretation</th></tr>
+<tr><td>&lt; 0.50</td><td>LOW</td><td>Events rarely self-propagate. Normal market.</td></tr>
+<tr><td>0.50–0.80</td><td>MODERATE</td><td>Some clustering. Elevated HFT or informed trading.</td></tr>
+<tr><td>0.80–0.95</td><td>HIGH</td><td>Strong clustering. Possible dark pool footprint or cascade start.</td></tr>
+<tr><td>≥ 0.95</td><td>CRITICAL</td><td>Near-explosive cascade. Institutional domino risk. Alert fired.</td></tr>
+</table>
+
+<h3>Dark Pool Signal</h3>
+<div class="formula-box">
+\[ \text{DarkPool} = \text{clip}\left(0.5 \cdot \frac{\alpha}{\beta} + 0.5 \cdot \text{clip}\left(\frac{(e/e_0 - 1)}{2}, 0, 1\right), 0, 1\right) \]
+where \(e\) = observed event rate, \(e_0 = 0.05\) (5% baseline). High clustering + above-average event rate suggests institutional block trading in dark pools.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch15" style="page-break-before:always">Chapter 15 — Technical Agent (30 Factors)</h2>
+<p>Source: <code>agents/technical.py</code> · Agent name: <code>"technical"</code></p>
+</div>
+
+<p>The Technical Agent analyzes price action, momentum, options flow, and market microstructure. It uses purely price- and options-derived signals — no fundamental or macro data. It is most predictive over 1–5 day horizons.</p>
+
+<h3>Factor Group 1 — Classical Technical Indicators</h3>
+
+<div class="factor-entry">
+<h5>1. RSI — Relative Strength Index (14-period)</h5>
+<div class="formula-box">
+\[ \text{RSI} = 100 - \frac{100}{1 + \text{RS}}, \quad \text{RS} = \frac{\text{Avg Gain (14d)}}{\text{Avg Loss (14d)}} \]
+</div>
+<p><strong>Scoring:</strong> RSI &lt; 30 → oversold → score ~80 (bullish). RSI &gt; 70 → overbought → score ~20 (bearish). RSI 30–70 → score ~50 (neutral). Linear interpolation between thresholds.</p>
+<p><strong>Parameter:</strong> <code>technical.rsi_window = 14</code> (dynamic, from settings.yaml)</p>
+</div>
+
+<div class="factor-entry">
+<h5>2. MACD Histogram</h5>
+<div class="formula-box">
+\[ \text{MACD} = \text{EMA}_{12} - \text{EMA}_{26} \]
+\[ \text{Signal Line} = \text{EMA}_9(\text{MACD}) \]
+\[ \text{Histogram} = \text{MACD} - \text{Signal} \]
+</div>
+<p><strong>Scoring:</strong> Histogram &gt; 0 and rising → score 70–80. Histogram &lt; 0 and falling → score 20–30. Crossover events scored 75 (bullish cross) or 25 (bearish cross).</p>
+</div>
+
+<div class="factor-entry">
+<h5>3. Bollinger Band Width (Squeeze Signal)</h5>
+<div class="formula-box">
+\[ \text{BB Width} = \frac{\text{Upper Band} - \text{Lower Band}}{\text{Middle Band}} \]
+\[ \text{Upper} = \text{SMA}_{20} + 2\sigma_{20}, \quad \text{Lower} = \text{SMA}_{20} - 2\sigma_{20} \]
+</div>
+<p><strong>Scoring:</strong> Narrow bands (squeeze) = compression → breakout expected → score 65. Wide bands (expansion) = already moving → score based on position within bands. Price above upper band → overbought → score 25.</p>
+<p><strong>Parameter:</strong> <code>technical.bollinger_window = 20</code>, <code>technical.bollinger_std = 2.0</code></p>
+</div>
+
+<div class="factor-entry">
+<h5>4. ADX — Average Directional Index</h5>
+<div class="formula-box">
+\[ \text{ADX} = \text{EMA}_{14}\!\left(\frac{|+\text{DI} - -\text{DI}|}{+\text{DI} + -\text{DI}} \times 100\right) \]
+</div>
+<p><strong>Scoring:</strong> ADX &gt; 25 = strong trend → score 70–80 if price advancing, 30–20 if declining. ADX &lt; 20 = weak/no trend → score ~50 (neutral). ADX measures trend strength, not direction.</p>
+</div>
+
+<div class="factor-entry">
+<h5>5. Golden/Death Cross</h5>
+<p>SMA-50 vs SMA-200 crossover. If SMA-50 &gt; SMA-200 → Golden Cross (bullish) → score 72. If SMA-50 &lt; SMA-200 → Death Cross → score 28. If no crossover occurred → 55 (modest bullish/bearish depending on gap size).</p>
+</div>
+
+<div class="factor-entry">
+<h5>6. EMA 9/21 Crossover</h5>
+<p>Fast EMA-9 vs slow EMA-21. If EMA-9 &gt; EMA-21 → short-term bullish → score 65. If EMA-9 &lt; EMA-21 → bearish → score 35. Crossover within 3 days → stronger signal ±10 points.</p>
+</div>
+
+<div class="factor-entry">
+<h5>7. Momentum Acceleration</h5>
+<div class="formula-box">
+\[ \text{Mom} = \frac{P_t}{P_{t-22}} - 1, \quad \text{Accel} = \text{Mom}_{\text{recent}} - \text{Mom}_{\text{lagged}} \]
+</div>
+<p><strong>Scoring:</strong> Positive and accelerating momentum → score 70–85. Decelerating despite positive momentum → score drops toward 50. Negative and accelerating → score 15–30.</p>
+</div>
+
+<div class="factor-entry">
+<h5>8. Variance Risk Premium (VRP)</h5>
+<div class="formula-box">
+\[ \text{VRP} = \text{IV}_{\text{ATM}} - \sigma_{\text{realized,30d}} \]
+</div>
+<p>Positive VRP = options overpriced relative to realized vol = expected mean reversion. Score: VRP &gt; 5% → bearish (score 35), VRP near 0 → neutral (50), VRP &lt; −5% → options cheap, bullish (65).</p>
+</div>
+
+<h3>Factor Group 2 — Options Microstructure</h3>
+
+<div class="factor-entry">
+<h5>9. IV Skew (25Δ Put-Call)</h5>
+<div class="formula-box">
+\[ \text{IV Skew} = \text{IV}_{\text{OTM put}} - \text{IV}_{\text{OTM call}} \]
+\[ \text{OTM put}: K \in [0.85 \cdot S, 0.96 \cdot S] \quad \text{OTM call}: K \in [1.04 \cdot S, 1.15 \cdot S] \]
+</div>
+<p><strong>Interpretation:</strong> Positive skew = puts more expensive than calls = fear premium = market expects downside. Score: skew &gt; 5% → score 30 (bearish). Skew &lt; 0 → calls expensive → bullish/complacent → score 70. Near 0 → neutral 50.</p>
+</div>
+
+<div class="factor-entry">
+<h5>10. Gamma Exposure (GEX)</h5>
+<div class="formula-box">
+<strong>Black-Scholes Gamma:</strong>
+\[ \Gamma = \frac{e^{-d_1^2/2}}{S \cdot \sigma \cdot \sqrt{T} \cdot \sqrt{2\pi}}, \quad d_1 = \frac{\ln(S/K) + (r + \frac{1}{2}\sigma^2)T}{\sigma\sqrt{T}} \]
+
+<strong>Net GEX ($ per 1% move):</strong>
+\[ \text{GEX} = \sum_i \Gamma_i^{\text{call}} \cdot \text{OI}_i^{\text{call}} \cdot 100 \cdot S - \sum_j \Gamma_j^{\text{put}} \cdot \text{OI}_j^{\text{put}} \cdot 100 \cdot S \]
+</div>
+<p><strong>Interpretation:</strong> Positive GEX → dealers long gamma → buy dips, sell rallies → volatility suppression → score 65. Negative GEX → dealers short gamma → amplify moves → score 35. Extreme negative GEX → potential pin risk → score 20.</p>
+</div>
+
+<div class="factor-entry">
+<h5>11. Max Pain</h5>
+<div class="formula-box">
+\[ \text{MaxPain} = \arg\min_K \left[\sum_i \max(K - K_i, 0) \cdot \text{OI}_i^{\text{call}} + \sum_j \max(K_j - K, 0) \cdot \text{OI}_j^{\text{put}}\right] \]
+</div>
+<p><strong>Interpretation:</strong> Max pain is the strike where option holders lose the most money at expiration — market makers are said to push price toward this level. Gap = (MaxPain − Spot)/Spot × 100. Gap &gt; 3% up → bullish (score 68). Gap &gt; 3% down → bearish (score 32). Neutral within ±1% (score 50).</p>
+</div>
+
+<div class="factor-entry">
+<h5>12. Implied Correlation (vs SPY)</h5>
+<div class="formula-box">
+\[ \text{Impl. Corr.} = \frac{\text{IV}_{\text{SPY,ATM}}}{\text{IV}_{\text{Stock,ATM}}} \]
+</div>
+<p><strong>Interpretation:</strong> Ratio &gt; 1 = stock has lower implied vol than market → stock likely to move less than market → score 60. Ratio &lt; 0.5 = stock implied vol much higher than market → idiosyncratic risk premium → score 35. Note: this is a proxy for the formal implied correlation basket formula.</p>
+</div>
+
+<h3>Factor Group 3 — Signal Quality</h3>
+
+<div class="factor-entry">
+<h5>13–14. TDA (Topological Data Analysis) Signal</h5>
+<p>See Chapter 13. The Technical Agent calls <code>TDASignalEngine().analyze(prices)</code> and adds the TDA signal as a factor. Score: <code>50 + tda_signal × 30</code> (range: 20 to 80). TRENDING regime → score 80. CYCLIC → score 20.</p>
+</div>
+
+<div class="factor-entry">
+<h5>15–19. Additional Indicators (Stochastic, ATR, Trend Slope, Volume, CMF)</h5>
+<p>Stochastic Oscillator (%K/%D), ATR-normalized trend, 20-day volume z-score, Chaikin Money Flow, price position within 52-week range. All scored on the same 0–100 bullish/bearish scale.</p>
+</div>
+
+<div class="factor-entry">
+<h5>30. PCA Signal Quality</h5>
+<p>Normalizes all factor scores to [−1,+1], computes mean signal direction, average signal strength, dispersion (std), and consensus as <code>strength × max(0, 1 − dispersion/1.5)</code>. Score: 50 + consensus × 30. Low dispersion + strong direction → high quality signal (score 70–80). High dispersion + weak direction → poor quality signal (score 45–55).</p>
+</div>
+
+<h3>Composite Probability Calculation</h3>
+<pre><code>raw_scores = [f.score for f in factor_scores.values()]
+avg_score = mean(raw_scores)          # 0–100
+prob_up = avg_score / 100.0           # 0–1
+# Clamp to [0.10, 0.90] to avoid extreme posteriors
+prob_up = max(0.10, min(0.90, prob_up))
+vote = LONG if prob_up > 0.55 else SHORT if prob_up < 0.45 else HOLD</code></pre>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch16">Chapter 16 — Fundamental Agent (28 Factors)</h2>
+<p>Source: <code>agents/fundamental.py</code> · Agent name: <code>"fundamental"</code></p>
+</div>
+
+<p>The Fundamental Agent assesses company quality, valuation, and financial health. It draws on yfinance financials, FRED risk-free rates, and Fama-French factor theory. It is most predictive over 3-month to 1-year horizons.</p>
+
+<h3>Factor Group 1 — Valuation Multiples</h3>
+
+<div class="factor-entry">
+<h5>1. P/E Ratio (Trailing)</h5>
+<p>Fetched from <code>info["trailingPE"]</code>. Score: P/E &lt; 15 → value territory → score 75. P/E 15–25 → fair value → score 55. P/E 25–40 → slightly expensive → score 40. P/E &gt; 40 → growth premium or speculative → score 25. P/E thresholds: <code>fundamental.pe_cheap=15</code>, <code>pe_fair=25</code>, <code>pe_expensive=40</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>2. PEG Ratio</h5>
+<div class="formula-box">
+\[ \text{PEG} = \frac{\text{P/E}}{\text{EPS Growth Rate (\%)}} \]
+</div>
+<p>PEG &lt; 1 → undervalued for growth → score 78. PEG 1–2 → fair → score 55. PEG &gt; 2 → expensive → score 30. Thresholds: <code>peg_undervalued=1.0</code>, <code>peg_fair=2.0</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>3. EV/EBITDA</h5>
+<p>&lt; 10 → cheap → score 80. 10–20 → fair → score 55. 20–30 → elevated → score 40. &gt; 30 → expensive → score 20. Thresholds: <code>ev_ebitda_cheap=10</code>, <code>ev_ebitda_fair=20</code>, <code>ev_ebitda_expensive=30</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>4. Price/Book Ratio</h5>
+<p>&lt; 1.5 → value territory → score 75. 1.5–3.0 → fair → score 50. &gt; 3.0 → growth premium → score 35. Thresholds: <code>pb_undervalued=1.5</code>, <code>pb_fair=3.0</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>5. Price/Sales Ratio</h5>
+<p>&lt; 2 → cheap → score 75. 2–4 → fair → score 55. &gt; 4 → expensive → score 35. Thresholds: <code>ps_cheap=2.0</code>, <code>ps_fair=4.0</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>6. FCF Yield</h5>
+<div class="formula-box">
+\[ \text{FCF Yield} = \frac{\text{Free Cash Flow}}{\text{Market Cap}} \times 100 \]
+</div>
+<p>FCF Yield &gt; 5% → strong → score 80. 2–5% → adequate → score 60. &lt; 2% → weak → score 35. Thresholds: <code>fcf_yield_good=2.0</code>, <code>fcf_yield_great=5.0</code>.</p>
+</div>
+
+<h3>Factor Group 2 — DCF Intrinsic Value</h3>
+
+<div class="factor-entry">
+<h5>7. DCF Upside</h5>
+<div class="formula-box">
+\[ V = \sum_{t=1}^{5} \frac{\text{FCF}_t}{(1+r)^t} + \frac{\text{FCF}_5 \cdot (1+g)}{(r-g)(1+r)^5} \]
+where \(r\) = WACC (estimated), \(g\) = terminal growth = 3%.
+
+\[ \text{DCF Upside} = \frac{V - P}{P} \times 100\% \]
+</div>
+<p>Upside &gt; 30% → strongly undervalued → score 85. Upside 10–30% → moderately undervalued → score 70. −20 to 10% → near fair value → score 50. Below −20% → overvalued → score 25.</p>
+</div>
+
+<h3>Factor Group 3 — Quality Metrics</h3>
+
+<div class="factor-entry">
+<h5>8–10. Revenue Growth, Earnings Growth</h5>
+<p>Year-over-year growth from income statements. Revenue growth &gt; 20% YoY → score 80. 10–20% → score 65. &lt; 10% → score 45. Negative growth → score 25.</p>
+</div>
+
+<div class="factor-entry">
+<h5>11. ROE — Return on Equity</h5>
+<div class="formula-box">
+\[ \text{ROE} = \frac{\text{Net Income}}{\text{Shareholders' Equity}} \]
+</div>
+<p>&gt; 20% → score 80. 10–20% → score 60. &lt; 10% → score 40. Negative → score 20. Thresholds: <code>roe_strong=20</code>, <code>roe_moderate=10</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>12. ROA — Return on Assets</h5>
+<p>&gt; 15% → score 80. 8–15% → score 60. 3–8% → score 45. &lt; 3% → score 25. <code>roa_strong=15</code>, <code>roa_moderate=8</code>, <code>roa_weak=3</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>13. Operating Margin</h5>
+<p>&gt; 25% → score 80. 15–25% → score 65. 5–15% → score 50. &lt; 5% → score 25. <code>operating_margin_strong=25</code>, <code>operating_margin_moderate=15</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>14. Altman Z-Score</h5>
+<div class="formula-box">
+\[ Z = 1.2X_1 + 1.4X_2 + 3.3X_3 + 0.6X_4 + 1.0X_5 \]
+where \(X_1=\) Working Capital/Assets, \(X_2=\) Retained Earnings/Assets, \(X_3=\) EBIT/Assets, \(X_4=\) Market Cap/Liabilities, \(X_5=\) Revenue/Assets.
+</div>
+<p>Z &gt; 3.0 → safe → score 80. Z 2.0–3.0 → grey zone → score 55. Z &lt; 2.0 → distress risk → score 25. Threshold: <code>fundamental.altman_z_quality=3.0</code>.</p>
+</div>
+
+<h3>Factor Group 4 — Advanced Theories</h3>
+
+<div class="factor-entry">
+<h5>15–19. Fama-French 5-Factor Model</h5>
+<div class="formula-box">
+\[ R_i - R_f = \alpha + \beta_m(R_m - R_f) + \beta_s\,\text{SMB} + \beta_v\,\text{HML} + \beta_r\,\text{RMW} + \beta_c\,\text{CMA} + \epsilon \]
+
+<ul>
+  <li><strong>SMB</strong> (Small Minus Big): Size premium. Positive loading = small-cap tilt → higher expected return.</li>
+  <li><strong>HML</strong> (High Minus Low P/B): Value premium. High P/B → growth stock → lower expected return historically.</li>
+  <li><strong>RMW</strong> (Robust Minus Weak): Profitability premium. High operating profitability → higher expected return.</li>
+  <li><strong>CMA</strong> (Conservative Minus Aggressive): Investment premium. Conservative investment → higher expected return.</li>
+</ul>
+
+<strong>Factor proxies (yfinance):</strong> SMB from market cap vs median, HML from P/B ratio, RMW from operating margin, CMA from capex ratio.
+</div>
+</div>
+
+<div class="factor-entry">
+<h5>20. CAPM Jensen's Alpha</h5>
+<div class="formula-box">
+\[ \text{Expected Return} = R_f + \beta(R_m - R_f) \]
+\[ \alpha = R_i^{\text{1yr}} - \text{Expected Return} \]
+
+where \(R_f\) = FRED FEDFUNDS rate (annualized decimal), \(R_m\) = SPY 1-year return, \(\beta\) = 1-year OLS beta of stock vs SPY.
+
+<strong>Scoring:</strong> \(\alpha\) in percentage × 1.5 + 50. Alpha +10% → score 65. Alpha −10% → score 35. Clamped to [10, 90].
+</div>
+</div>
+
+<div class="factor-entry">
+<h5>21. Dividend Growth Rate (5yr CAGR)</h5>
+<div class="formula-box">
+\[ \text{DGR} = \left(\frac{D_n}{D_0}\right)^{1/(n-1)} - 1 \]
+where \(D_n, D_0\) = most recent / oldest annual dividend, \(n\) = years of history.
+</div>
+<p>DGR &gt; 10% → strong growth → score 75. DGR &gt; 5% → moderate → score 62. DGR &gt; 0% → positive → score 55. No dividend or negative growth → score 45. From <code>yf.Ticker(ticker).dividends.resample("YE").sum()</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>22. Lockup Expiration Proxy</h5>
+<p>Uses <code>info["firstTradeDateMilliseconds"]</code> to estimate IPO date. Days since IPO: if 150–200 days (lockup typically expiring) → warning issued, score 40 (bearish: potential insider selling). 0–150 days (pre-lockup) → score 48. &gt; 200 days → lockup passed → score 55.</p>
+</div>
+
+<div class="factor-entry">
+<h5>23. Accruals Ratio</h5>
+<div class="formula-box">
+\[ \text{Accruals Ratio} = \frac{\text{Net Income} - \text{Operating Cash Flow}}{\text{Total Assets}} \]
+</div>
+<p>High accruals = earnings quality is poor (income not backed by cash). Accruals &lt; −5% → high quality earnings → score 75. Accruals 0–5% → moderate → score 55. Accruals &gt; 10% → red flag → score 25.</p>
+</div>
+
+<div class="factor-entry">
+<h5>24. Forward P/E</h5>
+<p>From <code>info["forwardPE"]</code>. Lower forward P/E than trailing P/E = earnings expected to grow = positive → score 70. Higher forward P/E = earnings expected to fall = bearish → score 35.</p>
+</div>
+
+<div class="factor-entry">
+<h5>25. Net Margin Trend</h5>
+<p>Compares current net margin vs prior year. Expanding margin → score 72. Contracting margin → score 32. Stable (within 1%) → score 52.</p>
+</div>
+
+<div class="factor-entry">
+<h5>26. Buyback Signal</h5>
+<p>If shares outstanding fell YoY → company is buying back stock (return of capital) → bullish signal → score 70. Shares rising → dilution → score 35. Stable → score 52.</p>
+</div>
+
+<div class="factor-entry">
+<h5>27–28. EPS Surprise + Interest Coverage</h5>
+<p>EPS surprise: actual vs estimated %. Coverage ratio: EBIT/Interest expense. Strong coverage (&gt;10×) → score 78. Adequate (5–10×) → score 60. Weak (&lt;2×) → score 25.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch17">Chapter 17 — Macro Agent (26 Factors)</h2>
+<p>Source: <code>agents/macro.py</code> · Agent name: <code>"macro"</code></p>
+</div>
+
+<h3>Factor Group 1 — Monetary Policy</h3>
+
+<div class="factor-entry">
+<h5>1. Fed Funds Rate</h5>
+<p>From FRED <code>FEDFUNDS</code>. Rate &lt; 2% → easy money → bullish equities → score 70. Rate 2–4% → neutral → score 55. Rate &gt; 4% → restrictive → score 35. <code>macro.fed_rate_easy=2.0</code>, <code>fed_rate_tight=4.0</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>2. Yield Curve (10Y − 2Y)</h5>
+<div class="formula-box">
+Spread = FRED <code>GS10</code> − FRED <code>GS2</code>. Inverted yield curve (spread &lt; 0) historically precedes recession by 12–18 months.
+</div>
+<p>Spread &gt; 0.5% → healthy curve → score 70. Spread −0.5% to 0.5% → flat/flattening → score 50. Spread &lt; −0.5% → inverted → recession warning → score 25. <code>macro.yield_curve_positive=0.5</code>, <code>yield_curve_inverted=−0.5</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>3. CPI Inflation (YoY)</h5>
+<p>From FRED <code>CPIAUCSL</code>. CPI &lt; 2.5% → comfortable → score 70. 2.5–5% → elevated but manageable → score 50. &gt; 5% → high inflation erodes real returns → score 30. <code>macro.cpi_target=2.5</code>, <code>cpi_elevated=5.0</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>4. M2 Money Supply Growth</h5>
+<p>From FRED <code>M2SL</code>. YoY M2 growth &gt; 5% → accommodative monetary conditions → bullish → score 65. M2 shrinking → quantitative tightening → score 35.</p>
+</div>
+
+<div class="factor-entry">
+<h5>5. SOFR Spread (Repo Market Stress)</h5>
+<div class="formula-box">
+\[ \text{SOFR Spread} = \text{SOFR} - \text{Fed Funds Rate} \]
+</div>
+<p>SOFR = Secured Overnight Financing Rate (FRED series <code>SOFR</code>). Normal: spread near 0. Spread &gt; 0.10% → mild stress → score 70. Spread &gt; 0.25% → elevated repo stress → score 50. Spread &gt; 0.50% → crisis-level → score 30 + warning. Repo market stress often precedes broader financial stress.</p>
+</div>
+
+<div class="factor-entry">
+<h5>6. Fed Balance Sheet (WALCL)</h5>
+<p>From FRED <code>WALCL</code> (Assets: Total Assets: Total Assets — quantitative easing gauge). Growing balance sheet → accommodative → score 68. Shrinking (QT) → tightening → score 38.</p>
+</div>
+
+<h3>Factor Group 2 — Market Breadth &amp; Risk</h3>
+
+<div class="factor-entry">
+<h5>7. VIX Fear Index</h5>
+<p>From yfinance <code>^VIX</code>. VIX &lt; 20 → calm → score 70. VIX 20–30 → elevated concern → score 50. VIX &gt; 30 → fear regime, but often contrarian buy signal near peaks → score 35 (bearish near term but 50 medium term).</p>
+</div>
+
+<div class="factor-entry">
+<h5>8. Credit Spreads (HYG/LQD)</h5>
+<p>Computes the 1-month return spread between HYG (high yield) and LQD (investment grade). Widening spreads (HYG underperforms) = credit stress = bearish → score 30. Tightening spreads = risk appetite = bullish → score 70.</p>
+</div>
+
+<div class="factor-entry">
+<h5>9. Copper/Gold Ratio</h5>
+<div class="formula-box">
+\[ \text{Cu/Au Ratio} = \frac{P_{\text{Copper}}}{P_{\text{Gold}}} \]
+</div>
+<p>Copper = industrial demand proxy (bullish growth). Gold = fear/store of value. Rising ratio → economic growth → score 72. Falling ratio → growth fears → score 32.</p>
+</div>
+
+<div class="factor-entry">
+<h5>10. Global Equity Breadth (ACWI vs SPY)</h5>
+<p>1-month relative return of ACWI (global) vs SPY (US). Positive = global outperforming US = broader risk-on appetite = bullish → score 65. Negative = global weakness despite US strength = fragile rally → score 40.</p>
+</div>
+
+<div class="factor-entry">
+<h5>11. SOX vs SPY (Semiconductor Relative Strength)</h5>
+<p>SOXX (semiconductor ETF) vs SPY 1-month relative return. Semis lead tech cycles → outperforming semis → tech bullish signal → score 68. Semis lagging → cycle top caution → score 38.</p>
+</div>
+
+<div class="factor-entry">
+<h5>12. Global Pre-Market Signal (Asia/EU)</h5>
+<p>Average overnight return of EWJ (Japan), FXI (China), EFA (Europe) ETFs. Positive = risk-on globally → US open likely bullish → score 65. Negative = risk-off → score 38.</p>
+</div>
+
+<div class="factor-entry">
+<h5>13. Growth vs Value Rotation (IVW/IVE)</h5>
+<p>1-month relative return of growth ETF IVW vs value ETF IVE. Growth outperforming = risk-on, momentum market → score 62. Value outperforming = defensivie rotation → score 45.</p>
+</div>
+
+<h3>Factor Group 3 — Activity Indicators</h3>
+
+<div class="factor-entry">
+<h5>14. ISM Manufacturing PMI</h5>
+<p>From FRED <code>MANEMP</code> or proxy. PMI &gt; 55 → strong expansion → score 78. PMI 50–55 → modest expansion → score 62. PMI &lt; 50 → contraction → score 32. <code>pmi_expansion=50</code>, <code>pmi_strong=55</code>, <code>pmi_weak=48</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>15. Initial Jobless Claims</h5>
+<p>From FRED <code>IC4WSA</code>. Claims &lt; 220,000 → tight labor market → score 75. 220–260K → moderate → score 55. &gt; 350K → labor market stress → score 25. <code>macro.claims_low=220000</code>, <code>claims_elevated=260000</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>16. UMich Consumer Sentiment</h5>
+<p>From FRED <code>UMCSENT</code>. &gt; 90 → strong → score 75. 70–90 → moderate → score 58. &lt; 55 → weak → score 30. <code>consumer_sentiment_strong=90</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>17. TIPS Breakeven Inflation</h5>
+<p>From FRED <code>T10YIE</code> (10-year breakeven). 1.5–2.5% → goldilocks range → score 68. &gt; 3% → high inflation expectations → score 30. &lt; 1.5% → deflationary fears → score 42. <code>tips_breakeven_low=1.5</code>, <code>tips_breakeven_high=2.5</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>18. Recession Probability</h5>
+<p>Internal estimate based on yield curve inversion + unemployment + PMI sub-50. Risk &lt; 20% → score 72. 20–60% → score 45. &gt; 60% → high recession risk → score 22. <code>macro.recession_prob_low=0.2</code>, <code>recession_prob_cutoff=0.6</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>19. BTC Risk-On Signal</h5>
+<p>3-month BTC return. BTC &gt; +20% → strong risk appetite → bullish equities → score 68. BTC &lt; −20% → risk-off → score 35. <code>macro.btc_momentum_bull=20</code>, <code>btc_momentum_bear=−20</code>.</p>
+</div>
+
+<div class="factor-entry">
+<h5>20. Amihud Illiquidity Ratio</h5>
+<div class="formula-box">
+\[ \text{Amihud} = \frac{1}{T}\sum_{t=1}^T \frac{|r_t|}{V_t} \]
+where \(r_t\) = daily return, \(V_t\) = daily dollar volume. Applied to SPY as a market-wide liquidity gauge.
+</div>
+<p>Low Amihud (liquid market) → score 65. High Amihud (illiquid, large moves per dollar) → score 35.</p>
+</div>
+
+<div class="factor-entry">
+<h5>21. Bond-Equity Correlation (TLT/SPY)</h5>
+<p>60-day rolling correlation of TLT (20Y Treasury) vs SPY returns. Negative correlation → traditional diversification working → stable risk parity environment → score 62. Positive correlation (bonds and stocks falling together) → liquidity crisis signal → score 35.</p>
+</div>
+
+<div class="factor-entry">
+<h5>26. PCA Signal Quality</h5>
+<p>Same PCA quality methodology as Technical Agent (see Chapter 15). Applied to all macro factor scores to measure internal consensus.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch18">Chapter 18 — Sentiment &amp; Behavioral Agent</h2>
+<p>14 factors | Ticker: <code>sentiment</code> | RAG pipeline + behavioral finance quantification</p>
+</div>
+
+<h3>Architecture Overview</h3>
+<p>The Sentiment Agent is the only agent that calls an LLM at inference time. It builds a Retrieval-Augmented Generation (RAG) pipeline: news headlines are fetched via NewsAPI, stored in a ChromaDB vector store, and the top-5 most semantically relevant articles for the current ticker are retrieved using cosine similarity. The retrieved context is passed to Gemini 2.0 Flash with a structured prompt asking for a SCORE (0–100) and two-sentence REASON. All remaining factors are quantitative and run unconditionally.</p>
+
+<div class="info-box"><strong>Keyword fallback:</strong> If Gemini is unavailable, <code>_keyword_scan()</code> counts bullish words ("surge","beat","growth","upgrade") vs bearish words ("drop","miss","loss","downgrade") and returns 0.65, 0.35, or 0.50.</div>
+
+<h3>Factor 1 — News Sentiment (RAG)</h3>
+<div class="factor-entry">
+<h5>RAG Pipeline</h5>
+<p>Query: <code>"lawsuits, earnings, bankruptcy, growth, new products, {ticker}"</code>. Time filter: last 12 hours only. Gemini returns 0–100 integer → divided by 100 → <em>rag_prob</em>. Probability update: <code>prob_up += (rag_prob − 0.5) × 0.4</code>. Confidence set to 0.8 if context contains "lawsuit","earnings","bankrupt","fda","sec"; else 0.55.</p>
+</div>
+
+<h3>Factor 2 — Short Interest</h3>
+<div class="factor-entry">
+<h5>Calculation</h5>
+<p>From yfinance <code>info</code>: <code>shortPercentOfFloat</code> (×100) and <code>shortRatio</code> (days to cover). Score: <code>clamp(80 − short_pct × 2, 10, 90)</code>. Threshold <code>agent_defaults.short_interest_high = 20%</code>: above → <code>prob_up −= 0.08</code>, squeeze warning. 10–20%: <code>prob_up −= 0.03</code>. Below 3%: <code>prob_up += 0.03</code>.</p>
+</div>
+
+<h3>Factor 3 — Fear &amp; Greed Index</h3>
+<div class="factor-entry">
+<h5>Contrarian Logic</h5>
+<p>Score ≤ 25 (Extreme Fear) → contrarian buy → <code>prob_up += 0.05</code>. Score ≥ 75 (Extreme Greed) → contrarian caution → <code>prob_up −= 0.05</code>. Computed internally from VIX, breadth, put/call metrics via AlternativeData module.</p>
+</div>
+
+<h3>Factor 4 — Analyst Consensus</h3>
+<div class="factor-entry">
+<h5>Formula</h5>
+<div class="formula-box">\[ \text{bull\_pct} = \frac{\text{StrongBuy} + \text{Buy}}{\text{Total Analysts}} \]</div>
+<p>bull_pct &gt; 0.70 → <code>prob_up += 0.05</code>. bear_pct &gt; 0.30 → <code>prob_up −= 0.04</code>. Threshold: <code>agent_defaults.analyst_bullish_consensus = 0.70</code>.</p>
+</div>
+
+<h3>Factor 5 — Market Breadth (RSP vs SPY)</h3>
+<div class="factor-entry">
+<p>RSP (equal-weight S&amp;P 500) vs SPY (cap-weight). RSP outperforming → broad advance → score &gt;65. SPY only leading → narrow mega-cap rally → score &lt;35. Score &gt;65: <code>prob_up += 0.03</code>. Score &lt;35: <code>prob_up −= 0.03</code>.</p>
+</div>
+
+<h3>Factor 6 — Options Put/Call Skew</h3>
+<div class="factor-entry">
+<p>Near-term options chain: <code>P/C skew = total_put_volume / total_call_volume</code>. &lt;0.7 → bullish speculation → score 70. &gt;1.2 → heavy put hedging → score 25. Neutral → score 50.</p>
+</div>
+
+<h3>Factor 7 — News / Social Momentum</h3>
+<div class="factor-entry">
+<p>Count of yfinance news articles in last 3 days. Score: <code>min(80, 40 + recent_count × 4)</code>. High news volume = social attention spike, precedes above-average short-term volatility.</p>
+</div>
+
+<h3>Factor 8 — EPS Forward Revision</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{revision\%} = \frac{\text{forwardEPS} - \text{trailingEPS}}{|\text{trailingEPS}|} \times 100 \]</div>
+<p>&gt;15% → score 85. 5–15% → score 60. −5 to +5% → score 50. &lt;−5% → score 25.</p>
+</div>
+
+<h3>Factor 9 — Unusual Options Activity (UOA)</h3>
+<div class="factor-entry">
+<p><code>vol_oi_ratio = call_volume / call_open_interest</code>. Score: <code>min(85, 40 + vol_oi_ratio × 30)</code>. Ratio &gt;1.5 = fresh positioning, potential informed buying.</p>
+</div>
+
+<h3>Factor 10 — Transfer Entropy Proxy (News→Price)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \hat{TE}_{news \to price} = \text{Corr}(news\_count_{t-1},\ return_t) \]</div>
+<p>Granger-causality proxy. |corr| &gt;0.3 → "news reliably leads price". Score: <code>clamp(50 + corr × 40, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 11 — Shannon Entropy (Signal Clarity)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ H = -\sum_i p_i \ln p_i \qquad H_\text{norm} = H / \ln N \qquad \text{score} = (1 - H_\text{norm}) \times 80 + 10 \]</div>
+<p>Low entropy = all factors aligned (high conviction). High entropy = maximum internal disagreement.</p>
+</div>
+
+<h3>Factor 12 — Analyst Price Target Upside</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{upside\%} = \frac{\text{targetMeanPrice} - \text{currentPrice}}{\text{currentPrice}} \times 100 \]</div>
+<p>&gt;20% → score 85. &gt;10%: <code>prob_up += 0.04</code>. &lt;−10%: <code>prob_up −= 0.04</code>.</p>
+</div>
+
+<h3>Factor 13 — AAII Sentiment Survey (Contrarian)</h3>
+<div class="factor-entry">
+<p>FRED series <code>AAIIBULL</code> and <code>AAIIBEAR</code>. Bull-bear spread &lt;−20% → extreme bearishness → contrarian buy → score 75, <code>prob_up += 0.04</code>. Spread &gt;30% → extreme bullishness → contrarian caution → score 25, <code>prob_up −= 0.03</code>.</p>
+</div>
+
+<h3>Factor 14 — Consumer Credit Proxy (Margin Debt)</h3>
+<div class="factor-entry">
+<p>FRED <code>TOTALSL</code> (total consumer credit). 3-month rate of change: rising credit = leveraged retail demand. Score 60 if &gt;2%, 50 if positive, 40 if contracting.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch19">Chapter 19 — Insider &amp; Whale Agent</h2>
+<p>11 factors | Ticker: <code>insider</code> | EDGAR Form 4, Kyle's Lambda, cluster buying, institutional positioning</p>
+</div>
+
+<h3>Architecture Overview</h3>
+<p>The Insider Agent detects "smart money" activity via SEC EDGAR Form 4 filings and institutional ownership data. Unlike other agents, final probability is derived as a <em>mean of all factor scores</em> (equal weighting, not additive update):</p>
+<div class="formula-box">\[ \text{prob\_up} = \text{sigmoid-map}\!\left(\frac{1}{N}\sum_i \text{score}_i,\ [0,100]\right) \]</div>
+
+<h3>Factor 1 — Insider Sentiment (Net Transaction Volume)</h3>
+<div class="factor-entry">
+<p>From yfinance <code>insider_transactions</code>: <code>net_shares = Σbuys − Σsells</code>. Score maps net shares to 0–100 centered at 50. Confidence += 0.2 when <code>|net_shares| &gt; 50,000</code>.</p>
+</div>
+
+<h3>Factor 2 — Institutional Backing (Whale Sentiment)</h3>
+<div class="factor-entry">
+<p>From yfinance <code>major_holders</code>: institutional ownership %. &gt;80% → high backing → score ~78. &lt;30% → score ~35. Confidence += 0.2 when &gt;80%.</p>
+</div>
+
+<h3>Factor 3 — EDGAR Form 4 Activity Count</h3>
+<div class="factor-entry">
+<p>Form 4 filings (last 60 days) from SEC EDGAR. ≥5 → high cluster → score 65 (insiders buying ≥5 reports in 60 days is a statistically rare event). 0 → score 50. 1–4 → score 55.</p>
+</div>
+
+<h3>Factor 4 — Material Events (8-K Count)</h3>
+<div class="factor-entry">
+<p>8-K filings in last 30 days. ≥5 → elevated material event risk → score 30, warning added. 1–4 → score 50. Earnings calls, executive changes, asset sales, and legal proceedings are all filed as 8-Ks.</p>
+</div>
+
+<h3>Factor 5 — EDGAR Institutional Ownership (Cross-Check)</h3>
+<div class="factor-entry">
+<p>13F-based ownership from EDGAR. Score: <code>min(80, edgar_inst_pct × 0.8)</code>. Cross-validates yfinance data with official SEC filings.</p>
+</div>
+
+<h3>Factor 6 — Insider Cluster Buys</h3>
+<div class="factor-entry">
+<p>From yfinance <code>insider_purchases</code>: count buy transactions. Score: <code>min(85, 40 + buy_count × 12)</code>. ≥3 transactions = "strong cluster" — multiple insiders buying simultaneously is one of the most reliable bullish microstructure signals.</p>
+</div>
+
+<h3>Factor 7 — Institutional Ownership % (13F)</h3>
+<div class="factor-entry">
+<p>&gt;70% → score 80. 40–70% → score 60. &lt;40% → score 40. From yfinance <code>institutional_holders</code>.</p>
+</div>
+
+<h3>Factor 8 — Short Squeeze Potential</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{squeeze\_score} = \min(85,\ 40 + \text{short\_float\%} \times 1.2) \]</div>
+<p>&gt;15% short float → "squeeze risk" warning. High short + rising price = self-reinforcing buying loop.</p>
+</div>
+
+<h3>Factor 9 — Float Reduction (Buyback vs Dilution)</h3>
+<div class="factor-entry">
+<p>Quarterly balance sheet: <code>share_chg = (shares_now − shares_old) / shares_old × 100</code>. &lt;−2% → active buyback → score 85. &gt;+3% → dilution warning, score 20.</p>
+</div>
+
+<h3>Factor 10 — Kyle's Lambda (Market Microstructure)</h3>
+<div class="factor-entry">
+<h5>Theory (Kyle 1985)</h5>
+<div class="formula-box">\[ \Delta P_t = \lambda \cdot Q_t^{signed} + \varepsilon_t \qquad \hat{\lambda} = \frac{\text{Cov}(\Delta P,\ Q^{signed})}{\text{Var}(Q^{signed})} \]</div>
+<p>λ = price impact per unit of signed order flow. High λ = thin market (large moves per share). Low λ = liquid (institutions can hide orders). Normalized: <code>lambda_norm = |λ| × 10⁶ / avg_price</code>. Score: <code>clamp(70 − lambda_norm × 10, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 11 — Insider Cluster 30-Day (EDGAR)</h3>
+<div class="factor-entry">
+<p>EDGAR Form 4 filings filed within the last 30 days. ≥3 filings in 30 days → strong recent cluster → score 75. More timely than the 60-day count in Factor 3.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch20">Chapter 20 — Risk &amp; Circuit Breaker Agent</h2>
+<p>16 factors | Ticker: <code>risk</code> | 5 hard override circuits + continuous risk metrics</p>
+</div>
+
+<h3>Override Priority Cascade</h3>
+<table>
+<tr><th>Priority</th><th>Override</th><th>Trigger</th><th>Effect</th></tr>
+<tr><td>1</td><td>BLACK SWAN</td><td>|Z-score| in last 5 sessions &gt;5σ</td><td>prob_up=0.10, multiplier=0.0 (halt)</td></tr>
+<tr><td>2</td><td>FLASH CRASH</td><td>Ticker 1d &lt;−7% OR SPY 1d &lt;−5%</td><td>prob_up=0.15, multiplier=0.0 (halt)</td></tr>
+<tr><td>3</td><td>GEO SHOCK</td><td>VIX &gt;35 AND (Gold &gt;+2% OR Oil &gt;+5%)</td><td>prob_up=0.30, multiplier=0.35</td></tr>
+<tr><td>4</td><td>CARRY UNWIND</td><td>USD/JPY &lt;125 OR JPY +1.5% in 1d</td><td>prob_up=0.30, multiplier=0.5, SHORT</td></tr>
+<tr><td>5</td><td>GARCH EXTREME</td><td>vol_regime=EXTREME OR VaR99 &lt;−5%</td><td>prob_up=0.20, multiplier=0.0</td></tr>
+<tr><td>6</td><td>GARCH HIGH</td><td>vol_regime=HIGH OR VaR95 &lt;−3%</td><td>prob_up=0.40, multiplier=0.5</td></tr>
+</table>
+
+<h3>Factor 1 — GARCH Volatility Regime</h3>
+<div class="factor-entry">
+<p>GARCHModel fits GARCH(1,1) on 1-year returns, forecasts 5-day forward vol. Regime set by percentile vs historical distribution: &lt;25th pctl → LOW (score 75). 25–75th → NORMAL (50). 75–95th → HIGH (25). &gt;95th → EXTREME (5).</p>
+</div>
+
+<h3>Factor 2 — EVT Tail Risk (99% VaR)</h3>
+<div class="factor-entry">
+<p>GPD fit to worst 10% of returns (see Chapter 11). VaR99 &gt;−2% → score 80. −2 to −5% → score 40. &lt;−5% → score 10 (extreme tails).</p>
+</div>
+
+<h3>Factor 3 — Monte Carlo 95% CI (5-Day)</h3>
+<div class="factor-entry">
+<p>5000-path GBM using GARCH-forecasted vol. CI95.low &gt;−3% → score 75. −3 to −7% → score 40. &lt;−7% → score 10.</p>
+</div>
+
+<h3>Factor 4 — Kelly Position Size</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ f^* = \frac{p \cdot b - q}{b}, \quad b = \frac{win\_return}{loss\_return}, \quad q = 1-p \]
+Half-Kelly: f*/2. Vol-adjusted Kelly: f*/2 × (target\_vol / current\_vol). Cap: 25%.</div>
+<p>Inputs: <code>prob_win</code> = fraction of MC paths above current price (converted from percentage). <code>win_return</code> = (CI68.high − price) / price. <code>loss_return</code> = |CI68.low − price| / price.</p>
+</div>
+
+<h3>Factors 5–8 — Black Swan, Flash Crash, Geo Shock, Carry Unwind</h3>
+<div class="factor-entry">
+<p><strong>Black Swan:</strong> Z-score of recent returns &gt;5σ → under a normal distribution this is a ~1-in-3.5M daily event → halt all trades.</p>
+<p><strong>Flash Crash:</strong> Ticker drops &gt;7% in a single session OR SPY drops &gt;5% → halt all trades.</p>
+<p><strong>Geo Shock:</strong> Requires ALL of: VIX &gt;35 AND (GLD 1d &gt;+2% OR XLE 1d &gt;+5%). Conjunction prevents single-variable false positives. Cap position at 35%.</p>
+<p><strong>Carry Unwind:</strong> USD/JPY &lt;125 → yen surging → carry trade forced liquidation → 50% size, SHORT bias.</p>
+</div>
+
+<h3>Factor 9 — KL Divergence (Regime Shift)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ D_{KL}(P_{recent} \| P_{baseline}) = \sum_{i=1}^{20} p_i \ln \frac{p_i}{q_i} \]
+Bins: 20 equal-width bins over [min, max] of baseline returns. Laplace smooth: +1e-10.</div>
+<p>KL &lt;0.4 → stable → score ~70. KL 0.4–1.0 → drift → score ~40. KL &gt;1.0 → regime break → score 10, critical warning.</p>
+</div>
+
+<h3>Factor 10 — Hawkes Branching Ratio</h3>
+<div class="factor-entry">
+<p>Fit Hawkes process (Chapter 14) to return jumps. Branching ratio α/β: &gt;0.9 → near-critical cascade risk. Score: <code>clamp(70 − branching_ratio × 60, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 11 — Quasi-MC VaR (Sobol)</h3>
+<div class="factor-entry">
+<p>4096-path Sobol GBM simulation (Chapter 10). 5-day 95th percentile worst case. Same scoring as Factor 3. ~10× sample efficiency vs pseudorandom MC.</p>
+</div>
+
+<h3>Factor 12 — Liquidity Risk (Volume Ratio)</h3>
+<div class="factor-entry">
+<p><code>liq_ratio = last_vol / avg_20d_vol</code>. &gt;1.5 → liquid → score 80. &lt;0.7 → thin → score 30. Parameters: <code>risk.liquidity_ratio_high = 1.5</code>, <code>risk.liquidity_ratio_low = 0.7</code>.</p>
+</div>
+
+<h3>Factor 13 — Drawdown from All-Time High</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ DD\% = \frac{\text{last\_close} - \text{ATH}_{2yr}}{\text{ATH}_{2yr}} \times 100 \qquad \text{score} = \text{clamp}(90 + DD\% \times 1.5,\ 10,\ 90) \]</div>
+<p>&gt;30% below ATH → warning added. Parameter: <code>risk.drawdown_warning_pct = 30</code>.</p>
+</div>
+
+<h3>Factor 14 — Tail Ratio (Up/Down Return Asymmetry)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{tail\_ratio} = P_{95} / |P_5| \]</div>
+<p>&gt;1.2 → positive skew → score 80. 0.8–1.2 → symmetric → score 50. &lt;0.8 → fat downside tails → score 25.</p>
+</div>
+
+<h3>Factor 15 — Correlation Regime (vs SPY)</h3>
+<div class="factor-entry">
+<p>Rolling 60d corr vs SPY minus 252d corr. Large negative Δ (&lt;−0.1) → decorrelating → idiosyncratic risk → score 70. Large positive Δ → market-driven → score 30. Threshold: <code>risk.correlation_delta_threshold = 0.1</code>.</p>
+</div>
+
+<h3>Factor 16 — GARCH Standard Circuit Breakers</h3>
+<div class="factor-entry">
+<p>Steady-state (no emergency override): EXTREME or VaR99&lt;−5% → prob_up=0.20, halt. HIGH or VaR95&lt;−3% → prob_up=0.40, half-size. Normal → prob_up=0.50, full size.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch21">Chapter 21 — Geopolitical Agent</h2>
+<p>19 factors | Ticker: <code>geopolitical</code> | ETF-based geo-risk proxies, FRED GPR Index</p>
+</div>
+
+<h3>Architecture Overview</h3>
+<p>All signals are derived from liquid ETF prices and FRED data — no specialized geopolitical API needed. Geopolitical events manifest in ETF prices within hours. The agent monitors XLE (oil), GLD (gold), ITA (defense), EEM (emerging markets), HYG/LQD (credit), ACWI (global equity), and the Caldara-Iacoviello GPR Index from FRED.</p>
+
+<h3>Factor 1 — Oil Shock (XLE vs SPY)</h3>
+<div class="factor-entry">
+<p><code>_rel_strength("XLE", "SPY", lookback=22)</code>: 22-day RS. &gt;+5% → energy stress → <code>prob_up −= 0.08</code>. &lt;−5% → calm → <code>prob_up += 0.03</code>. Score: <code>clamp(50 − RS×2, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 2 — Gold Safe-Haven (GLD)</h3>
+<div class="factor-entry">
+<p>GLD 22-day momentum. &gt;+5% → safe-haven flight → <code>prob_up −= 0.10</code>, conf+=0.05. &lt;−3% → easing → <code>prob_up += 0.05</code>. Score: <code>clamp(50 − momentum×3, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 3 — EM Stress (EEM vs SPY)</h3>
+<div class="factor-entry">
+<p>EEM RS vs SPY (22d). &lt;−5% → EM stress → <code>prob_up −= 0.06</code>. &gt;+3% → healthy → <code>prob_up += 0.04</code>. Score: <code>clamp(50 + RS×2.5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 4 — Defense RS (ITA vs SPY)</h3>
+<div class="factor-entry">
+<p>ITA RS &gt;+5% → defense stocks bid up → conflict risk priced → <code>prob_up −= 0.07</code>. Defense outperformance often leads geopolitical news by weeks.</p>
+</div>
+
+<h3>Factor 5 — VIX Fear Index</h3>
+<div class="factor-entry">
+<p>&gt;30 → extreme fear → <code>prob_up −= 0.10</code>, warning. 20–30 → elevated → <code>prob_up −= 0.05</code>. &lt;20 → calm → <code>prob_up += 0.03</code>. Score: <code>clamp(90 − (VIX−10)×2.5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 6 — Copper/Gold Ratio</h3>
+<div class="factor-entry">
+<p>COPX/GLD ratio 1-month change. Rising → industrial demand expanding → growth signal. &gt;+3% → <code>prob_up += 0.05</code>. &lt;−3% → demand contraction → <code>prob_up −= 0.05</code>.</p>
+</div>
+
+<h3>Factor 7 — Global Breadth (ACWI vs SPY)</h3>
+<div class="factor-entry">
+<p>ACWI RS &lt;−3% → global equities lagging US → international headwinds → <code>prob_up −= 0.04</code>. &gt;+2% → healthy → <code>prob_up += 0.03</code>.</p>
+</div>
+
+<h3>Factor 8 — USD Safe-Haven (DXY)</h3>
+<div class="factor-entry">
+<p>From CurrencyData. DXY 1m &gt;+2% → safe-haven USD buying → risk-off → <code>prob_up −= 0.06</code>. &lt;−2% → risk-on → <code>prob_up += 0.04</code>.</p>
+</div>
+
+<h3>Factor 9 — Credit Stress (HYG/LQD)</h3>
+<div class="factor-entry">
+<p>HYG/LQD ratio 1-month change. Ratio falling → credit spreads widening → <code>prob_up −= 0.07</code>. Rising → credit healthy → <code>prob_up += 0.04</code>. Credit stress typically leads equity stress by weeks.</p>
+</div>
+
+<h3>Factor 10 — Sector Rotation Signal</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{rotation\_score} = 1.5 \times RS_{XLK} - 1.0 \times RS_{XLE} - 0.5 \times RS_{XLF} \]</div>
+<p>Tech leading → growth regime → bullish. Energy/financials leading → inflation/stagflation. &gt;+5: <code>prob_up += 0.03</code>. &lt;−5: <code>prob_up −= 0.04</code>.</p>
+</div>
+
+<h3>Factor 11 — Supply Chain Stress (Shipping BDRY)</h3>
+<div class="factor-entry">
+<p>BDRY (Breakwave Dry Bulk Shipping ETF) 1-month momentum. Proxy for Baltic Dry Index. Collapse &lt;−20% → demand destruction warning. Score: <code>clamp(50 + bdry_mom×1.5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 12 — Commodity Shock (XLE + XLB)</h3>
+<div class="factor-entry">
+<p>Average 1-month momentum of XLE (energy) + XLB (materials). &gt;+8% → commodity inflation. Score: <code>clamp(50 + avg_mom×1.2, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 13 — EM Contagion Risk (EMB)</h3>
+<div class="factor-entry">
+<p>EMB (J.P. Morgan EM Bond ETF) 1-month momentum. &lt;−3% → capital flight from EM → leading indicator of global risk-off. Score: <code>clamp(50 + emb_mom×5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 14 — Oil Price Direct (Brent BZ=F)</h3>
+<div class="factor-entry">
+<p>Brent crude 22-day momentum. &gt;+15% → inflationary tension → <code>prob_up −= 0.05</code>. &lt;−15% → demand concern → <code>prob_up += 0.03</code>. Score: <code>clamp(50 − oil_mom×1.5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 15 — Election Cycle Phase</h3>
+<div class="factor-entry">
+<p>Days to next US election (2026 midterms Nov 3, 2028 presidential Nov 7). &lt;90d → policy uncertainty → score 40. 90–365d → pre-election drift → score 55. &gt;365d → early cycle → score 60.</p>
+</div>
+
+<h3>Factor 16 — Transport Index (IYT vs SPY — Dow Theory)</h3>
+<div class="factor-entry">
+<p>Dow Theory: bull market requires both Industrials and Transports at new highs. IYT RS &gt;+3% → transports confirming → score 65. IYT RS &lt;−3% → divergence → score 35.</p>
+</div>
+
+<h3>Factor 17 — Commodity Index (PDBC)</h3>
+<div class="factor-entry">
+<p>PDBC (Invesco Commodity ETF) 22-day momentum. &gt;+12% → commodity inflation → <code>prob_up −= 0.04</code>. Score: <code>clamp(50 + crb_mom, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 18 — GPR Index (FRED Geopolitical Risk)</h3>
+<div class="factor-entry">
+<h5>Caldara-Iacoviello GPR Index</h5>
+<p>Published by the Federal Reserve (FRED: <code>GPRC</code> or <code>GPRGLOBAL</code>). Based on automated text search of newspaper archives for geopolitical risk keywords (war, terrorism, political tensions).</p>
+<div class="formula-box">\[ \text{GPR\_rel} = \frac{\text{GPR\_now}}{\text{GPR\_historical\_mean}} \]
+Score = clamp(70 − (GPR_rel − 1.0) × 40, 10, 90)</div>
+<p>&gt;2.0 → extreme risk → <code>prob_up −= 0.08</code>, critical warning. 1.5–2.0 → elevated → <code>prob_up −= 0.04</code>. &lt;0.75 → calm tailwind → <code>prob_up += 0.03</code>.</p>
+</div>
+
+<h3>Factor 19 — PCA Signal Quality</h3>
+<div class="factor-entry">
+<p>Applied to all Geopolitical factor scores. Measures internal consensus: <code>consensus = signal_strength × max(0, 1 − dispersion/1.5)</code>. Score: <code>clamp(50 + mean_signal×40, 10, 90)</code>.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch22">Chapter 22 — Volatility Agent</h2>
+<p>9 factors | Ticker: <code>volatility</code> | Options surface, GARCH regime, Kalman beta, VIX term structure</p>
+</div>
+
+<h3>Architecture Overview</h3>
+<p>The Volatility Agent reads the options market and GARCH-derived volatility to assess whether current conditions are bullish or bearish. High-vol environments accompany falling prices; low-vol environments accompany upward drift. This agent also provides the dynamic Kalman beta used by Bayesian Fusion for correlation adjustment.</p>
+
+<h3>Factor 1 — GARCH Vol Regime</h3>
+<div class="factor-entry">
+<p>LOW → <code>prob_up += 0.10</code>, conf+=0.10. HIGH → <code>prob_up −= 0.15</code>, conf+=0.15. EXTREME → <code>prob_up −= 0.20</code>, conf+=0.20. Score map: {LOW:70, NORMAL:50, HIGH:30, EXTREME:10}.</p>
+</div>
+
+<h3>Factor 2 — Put/Call Ratio</h3>
+<div class="factor-entry">
+<p>Total put OI / total call OI. &gt;1.2 → heavy hedging → <code>prob_up −= 0.15</code>. &lt;0.7 → bullish speculation → <code>prob_up += 0.10</code>. Parameters: <code>volatility.put_call_overbought = 1.2</code>, <code>volatility.put_call_bearish = 0.7</code>.</p>
+</div>
+
+<h3>Factor 3 — IV vs Realized Vol (Variance Risk Premium)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{IV\_RV\_ratio} = \frac{\text{ATM Implied Move}}{\sigma_\text{GARCH\_daily} \times \sqrt{T_\text{trading}}} \]</div>
+<p>&gt;1.5 → options overpriced, vol crush likely → slight bullish → <code>prob_up += 0.05</code>. &lt;0.7 → options cheap, vol expansion expected → caution. Parameters: <code>volatility.iv_rv_overpriced = 1.5</code>, <code>volatility.iv_rv_underpriced = 0.7</code>.</p>
+</div>
+
+<h3>Factor 4 — Kalman Dynamic Beta</h3>
+<div class="factor-entry">
+<p>Time-varying beta from state-space Kalman Filter (see Chapter 12). Score=50 (directionally neutral — beta quantifies magnitude of market exposure, not direction). Used by Bayesian Fusion for correlation-adjusted weighting.</p>
+</div>
+
+<h3>Factor 5 — SPY Correlation (60-Day Rolling)</h3>
+<div class="factor-entry">
+<p>Rolling 60-day Pearson correlation vs SPY. Score=50 (neutral for direction). Feeds into Bayesian Fusion correlation penalty: high correlation → less independent signals per agent → lower incremental weight.</p>
+</div>
+
+<h3>Factor 6 — VVIX (Volatility of Volatility)</h3>
+<div class="factor-entry">
+<p>^VVIX measures implied volatility of VIX options. &gt;120 (<code>volatility.vvix_extreme</code>) → options market pricing in major VIX spike. Score: <code>clamp(100 − (VVIX−60)×1.5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 7 — VIX Term Structure (Contango/Backwardation)</h3>
+<div class="factor-entry">
+<p>VIX 3M (^VIX3M) − spot VIX. Positive → contango, calm → score 75. Negative → backwardation, acute panic → score 25. &lt;−2 → "acute market stress" warning in reasoning.</p>
+</div>
+
+<h3>Factor 8 — Realized Vol Trend (10d/30d)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{RV}_{N} = \sigma_{Nd} \times \sqrt{252} \times 100\% \qquad \text{ratio} = \text{RV}_{10} / \text{RV}_{30} \]</div>
+<p>&lt;0.8 → vol calming → score 70. &gt;1.2 → vol spiking → score 25. Parameters: <code>volatility.rv_short_window = 10</code>, <code>volatility.rv_long_window = 30</code>.</p>
+</div>
+
+<h3>Factor 9 — CBOE SKEW Index (Tail Risk Premium)</h3>
+<div class="factor-entry">
+<p>^SKEW measures the price of S&amp;P 500 OTM puts relative to ATM options. High SKEW while VIX is low = "fear of the unknown" — black swan protection being purchased quietly. &gt;140 → high tail risk → score &lt;30. Score: <code>clamp(130 − SKEW, 10, 90)</code>.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="agent-header">
+<h2 id="ch23">Chapter 23 — Currency Agent</h2>
+<p>11 factors | Ticker: <code>currency</code> | FX dynamics, carry trade, sector revenue exposure weighting</p>
+</div>
+
+<h3>Architecture Overview</h3>
+<p>FX impact is stock-specific: a stronger USD hurts multinationals more than domestic companies. <code>SECTOR_FX_EXPOSURE</code> maps each sector to an estimated international revenue percentage. The DXY change is multiplied by this fraction and a 0.3 transmission coefficient to estimate the per-stock earnings headwind/tailwind.</p>
+
+<h3>Factor 1 — US Dollar Index (DXY)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{FX\_impact} = -\Delta DXY_{1m} \times \text{sector\_exposure} \times 0.3 \]</div>
+<p>Tech (55% intl rev) + DXY up 3%: impact = −0.495 → prob_up reduced by 0.005. Score: <code>clamp(50 − dxy_1m×4, 10, 90)</code>. Multiplier: <code>currency.fx_impact_multiplier = 0.3</code>.</p>
+</div>
+
+<h3>Factor 2 — EUR/USD Rate</h3>
+<div class="factor-entry">
+<p>&gt;1.05 → strong euro → USD weak → favorable for US multinationals → score 65. &lt;0.95 → headwind → score 35. EUR/USD is ~57% of the DXY index weighting.</p>
+</div>
+
+<h3>Factor 3 — USD/JPY Carry Signal</h3>
+<div class="factor-entry">
+<p>Borrow in JPY (near-zero rates), invest in USD assets. When USD/JPY falls sharply, carry traders sell risk assets to repay JPY. &lt;120 → carry unwind → <code>prob_up −= 0.08</code>, warning. &gt;150 → carry intact → slight bullish. Parameters: <code>currency.usdjpy_weak = 120</code>, <code>currency.usdjpy_strong = 140</code>.</p>
+</div>
+
+<h3>Factor 4 — USD/CNY (China Stress)</h3>
+<div class="factor-entry">
+<p>&gt;7.3 → CNY weakening → China macro stress → score 30, <code>prob_up −= 0.04</code>. Parameter: <code>currency.usdcny_stress = 7.3</code>.</p>
+</div>
+
+<h3>Factor 5 — GBP/USD Rate</h3>
+<div class="factor-entry">
+<p>&gt;1.25 → strong pound → score 65. &lt;1.25 → score 40. Relevant for UK-exposed companies.</p>
+</div>
+
+<h3>Factor 6 — EM Currency Stress</h3>
+<div class="factor-entry">
+<p>Average USD gain vs EM currency basket. &gt;+3% → capital flight → <code>prob_up −= 0.06</code>, warning. &lt;−2% → risk appetite → <code>prob_up += 0.04</code>. Score: <code>clamp(50 − em_stress×5, 10, 90)</code>.</p>
+</div>
+
+<h3>Factor 7 — FX Translation Impact</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{translation} = -\Delta DXY_{1m} \times \text{sector\_exposure} \times 0.25 \]</div>
+<p>Accounting translation of foreign earnings into USD. A DXY +4% with 50% foreign revenue → ~2% less earnings in USD terms.</p>
+</div>
+
+<h3>Factor 8 — Petro-Currency Signal (CAD/AUD)</h3>
+<div class="factor-entry">
+<p>Average 22-day momentum of CAD=X and AUD=X. Rising petro-currencies → commodity demand strong → risk-on. &gt;+2% → <code>prob_up += 0.03</code>. &lt;−2% → <code>prob_up −= 0.03</code>.</p>
+</div>
+
+<h3>Factor 9 — Carry Trade Attractiveness (Rate Differential)</h3>
+<div class="factor-entry">
+<p>FRED <code>FEDFUNDS</code> minus 3.5% global benchmark proxy. Rate diff &gt;+1% → USD carry attractive → capital inflows → score 70. Narrowing carry → score 35.</p>
+</div>
+
+<h3>Factor 10 — Real Interest Rate (10Y)</h3>
+<div class="factor-entry">
+<div class="formula-box">\[ \text{Real Rate} = \text{DGS10} - \text{T10YIE} \]</div>
+<p>Positive real rate → USD attractive, gold headwind. &gt;+1% → score 65. 0 to +1% → score 50. &lt;0% → score &lt;40 (negative real rates erode USD appeal).</p>
+</div>
+
+<h3>Factor 11 — EM FX Pressure (EEM Proxy)</h3>
+<div class="factor-entry">
+<p>EEM 22-day momentum. &gt;+5% → EM strength → score ~60. &lt;−5% → capital flight → score ~40. Score: <code>clamp(50 + eem_mom×2, 10, 90)</code>.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch24" class="nobreak">Chapter 24 — Risk Circuit Breakers &amp; Override System</h2>
+
+<h3>24.1 Two-Layer Override Architecture</h3>
+<p>AlphaAgent has two override layers: (1) Agent-level overrides inside the Risk Agent that modify its own output via <code>prob_up</code> and <code>multiplier</code> fields. (2) Orchestrator-level response to the <code>multiplier</code> field when computing the final SignalPacket position size.</p>
+
+<h3>24.2 Override Keyword Detection</h3>
+<table>
+<tr><th>Keyword in reasoning</th><th>System Response</th><th>Position Size</th></tr>
+<tr><td>BLACK SWAN</td><td>Halt all new positions</td><td>0%</td></tr>
+<tr><td>FLASH CRASH</td><td>Halt all new positions</td><td>0%</td></tr>
+<tr><td>WAR/GEO SHOCK</td><td>Emergency size cap</td><td>35%</td></tr>
+<tr><td>CARRY UNWIND</td><td>SHORT bias enforced</td><td>50%</td></tr>
+<tr><td>CRITICAL RISK</td><td>Capital protection mode</td><td>0%</td></tr>
+<tr><td>HIGH RISK</td><td>Half-position mode</td><td>50%</td></tr>
+</table>
+
+<h3>24.3 Position Size Formula</h3>
+<div class="formula-box">\[ \text{final\_size} = \text{kelly\_fraction} \times \text{risk\_multiplier} \times \text{portfolio\_value} \]</div>
+
+<h3>24.4 Geopolitical Override</h3>
+<p>The Geopolitical Agent independently adds: if avg_score &lt;25 → "GEOPOLITICAL OVERRIDE: Extreme risk — cap position size at 35%". This can trigger simultaneously with a Risk Agent override, producing compounding size reductions.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch25" class="nobreak">Chapter 25 — Dynamic Horizon Weighting</h2>
+
+<h3>25.1 Motivation</h3>
+<p>RSI has predictive power over days; DCF value materializes over years. One fixed set of agent weights cannot serve all horizons. The horizon system reblends agent outputs post-orchestration.</p>
+
+<h3>25.2 Horizon Weight Table</h3>
+<table>
+<tr><th>Horizon</th><th>Technical</th><th>Vol</th><th>Sentiment</th><th>Macro</th><th>Fundamental</th><th>Insider</th><th>Currency</th><th>Geo</th><th>Risk</th></tr>
+<tr><td>1D</td><td>3.0</td><td>3.0</td><td>2.0</td><td>0.5</td><td>0.2</td><td>0.5</td><td>0.5</td><td>0.3</td><td>1.0</td></tr>
+<tr><td>1W</td><td>2.5</td><td>2.5</td><td>1.8</td><td>0.8</td><td>0.3</td><td>0.8</td><td>0.8</td><td>0.5</td><td>1.0</td></tr>
+<tr><td>1M</td><td>1.0</td><td>1.0</td><td>1.0</td><td>1.0</td><td>1.0</td><td>1.0</td><td>1.0</td><td>1.0</td><td>1.0</td></tr>
+<tr><td>3M</td><td>0.5</td><td>0.5</td><td>0.7</td><td>1.5</td><td>2.0</td><td>2.0</td><td>1.2</td><td>1.5</td><td>1.0</td></tr>
+<tr><td>6M</td><td>0.3</td><td>0.3</td><td>0.5</td><td>2.0</td><td>2.5</td><td>2.5</td><td>1.5</td><td>2.0</td><td>1.0</td></tr>
+<tr><td>1Y</td><td>0.2</td><td>0.2</td><td>0.3</td><td>2.5</td><td>3.0</td><td>3.0</td><td>2.0</td><td>2.5</td><td>1.0</td></tr>
+</table>
+
+<h3>25.3 Implementation</h3>
+<div class="formula-box">\[ P_\text{horizon\_raw} = \frac{\sum_i w_i \cdot p_i}{\sum_i w_i} \qquad P_\text{final} = 0.8 \cdot P_\text{horizon\_raw} + 0.2 \cdot P_\text{base} \]</div>
+<p>The 20% anchoring to the base probability prevents extreme reweighting from completely inverting the Bayesian fusion output. Direction re-derived: &gt;0.55 → LONG, &lt;0.45 → SHORT, else NEUTRAL. API response includes both <code>probability</code> (horizon-weighted) and <code>base_probability</code> (raw orchestrator output).</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch26" class="nobreak">Chapter 26 — Signal Decay &amp; Holding Period (Ornstein-Uhlenbeck)</h2>
+
+<h3>26.1 Holding Period Estimation</h3>
+<p>AlphaAgent estimates holding period using the Ornstein-Uhlenbeck mean-reversion half-life. If log-price follows an OU process, the half-life gives the expected time for a price deviation to revert 50% back to the mean — approximating the optimal holding period before alpha decays.</p>
+<div class="formula-box">\[ dX_t = \theta(\mu - X_t)\,dt + \sigma\,dW_t \qquad t_{1/2} = \frac{\ln 2}{\theta} \]</div>
+<p>The API response includes <code>holding_period.min_days</code>, <code>expected_days</code>, and <code>max_days</code> (68% confidence interval of the OU process).</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch27" class="nobreak">Chapter 27 — Settings Configuration Reference</h2>
+
+<h3>Key Parameters by Section (config/settings.yaml)</h3>
+
+<h4>data</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>technical_period</td><td>1y</td><td>Technical indicator lookback</td></tr>
+<tr><td>short_period</td><td>5d</td><td>VIX term structure, flash crash</td></tr>
+<tr><td>medium_period</td><td>3mo</td><td>Liquidity ratio rolling average</td></tr>
+<tr><td>long_period</td><td>2y</td><td>ATH, correlation regime</td></tr>
+<tr><td>min_rolling_days</td><td>20</td><td>Minimum for rolling averages</td></tr>
+<tr><td>min_tail_days</td><td>60</td><td>Minimum returns for tail ratio</td></tr>
+<tr><td>backtest_period</td><td>3y</td><td>Default historical backtest window</td></tr>
+<tr><td>walk_forward_train_years</td><td>1.0</td><td>Walk-forward training window (years)</td></tr>
+</table>
+
+<h4>technical</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>rsi_window</td><td>14</td><td>RSI Wilder smoothing period</td></tr>
+<tr><td>bollinger_window</td><td>20</td><td>Bollinger Bands SMA period</td></tr>
+<tr><td>bollinger_std</td><td>2.0</td><td>Bollinger Bands standard deviation</td></tr>
+<tr><td>adx_window</td><td>14</td><td>ADX trend strength period</td></tr>
+<tr><td>momentum_lookback</td><td>22</td><td>1-month price momentum (trading days)</td></tr>
+<tr><td>min_data_days</td><td>50</td><td>Minimum price history to run agent</td></tr>
+</table>
+
+<h4>volatility</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>regime_low_pct</td><td>25</td><td>Percentile → LOW vol regime</td></tr>
+<tr><td>regime_high_pct</td><td>95</td><td>Percentile → HIGH vol regime</td></tr>
+<tr><td>put_call_bearish</td><td>0.7</td><td>P/C below → bullish</td></tr>
+<tr><td>put_call_overbought</td><td>1.2</td><td>P/C above → bearish hedging</td></tr>
+<tr><td>iv_rv_overpriced</td><td>1.5</td><td>IV/RV → vol crush likely</td></tr>
+<tr><td>vvix_extreme</td><td>120</td><td>VVIX → extreme meta-uncertainty</td></tr>
+<tr><td>skew_extreme</td><td>140</td><td>SKEW → high tail risk</td></tr>
+<tr><td>rv_short_window</td><td>10</td><td>Short RV window (days)</td></tr>
+<tr><td>rv_long_window</td><td>30</td><td>Long RV window (days)</td></tr>
+</table>
+
+<h4>fundamental</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>pe_cheap / pe_fair / pe_expensive</td><td>15 / 25 / 40</td><td>P/E ratio thresholds</td></tr>
+<tr><td>peg_undervalued / peg_fair</td><td>1.0 / 2.0</td><td>PEG ratio thresholds</td></tr>
+<tr><td>fcf_yield_good / fcf_yield_great</td><td>2% / 5%</td><td>Free cash flow yield thresholds</td></tr>
+<tr><td>dcf_upside_strong / dcf_upside_moderate</td><td>30% / 10%</td><td>DCF upside % for scoring</td></tr>
+<tr><td>revenue_growth_strong</td><td>20%</td><td>YoY revenue growth → strong score</td></tr>
+<tr><td>roe_strong / roe_moderate</td><td>20% / 10%</td><td>Return on equity thresholds</td></tr>
+<tr><td>altman_z_quality</td><td>3.0</td><td>Altman Z → financially safe</td></tr>
+</table>
+
+<h4>macro</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>yield_curve_positive</td><td>0.5%</td><td>10Y-2Y → normal slope</td></tr>
+<tr><td>yield_curve_inverted</td><td>-0.5%</td><td>10Y-2Y → inversion (recession)</td></tr>
+<tr><td>fed_rate_easy / fed_rate_tight</td><td>2.0% / 4.0%</td><td>Fed Funds policy thresholds</td></tr>
+<tr><td>cpi_target / cpi_elevated</td><td>2.5% / 5.0%</td><td>CPI threshold levels</td></tr>
+<tr><td>pmi_expansion / pmi_strong</td><td>50 / 55</td><td>ISM PMI regime levels</td></tr>
+<tr><td>claims_low / claims_elevated</td><td>220K / 260K</td><td>Initial jobless claims levels</td></tr>
+</table>
+
+<h4>risk</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>liquidity_ratio_high / low</td><td>1.5 / 0.7</td><td>Volume ratio thresholds</td></tr>
+<tr><td>drawdown_warning_pct</td><td>30%</td><td>ATH drawdown → warning</td></tr>
+<tr><td>tail_ratio_positive / negative</td><td>1.2 / 0.8</td><td>95th/5th pctl asymmetry</td></tr>
+<tr><td>correlation_delta_threshold</td><td>0.1</td><td>60d vs 252d corr Δ → regime change</td></tr>
+</table>
+
+<h4>backtest</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>initial_capital</td><td>$100,000</td><td>Starting portfolio value</td></tr>
+<tr><td>max_position_pct</td><td>20%</td><td>Max allocation per position</td></tr>
+<tr><td>transaction_cost_bps</td><td>5 bps</td><td>Commission: 0.05% one-way</td></tr>
+<tr><td>bid_ask_spread_bps</td><td>2 bps</td><td>Market impact slippage</td></tr>
+<tr><td>borrow_cost_annual</td><td>0.50%</td><td>Short selling borrow cost</td></tr>
+<tr><td>kelly_fraction</td><td>10%</td><td>Kelly fraction for position sizing</td></tr>
+</table>
+
+<h4>agent_defaults</h4>
+<table><tr><th>Key</th><th>Default</th><th>Purpose</th></tr>
+<tr><td>neutral_probability</td><td>0.5</td><td>All agents start here</td></tr>
+<tr><td>long_threshold</td><td>0.55</td><td>prob_up above → LONG vote</td></tr>
+<tr><td>short_threshold</td><td>0.45</td><td>prob_up below → SHORT vote</td></tr>
+<tr><td>rag_high_confidence</td><td>0.8</td><td>Confidence when material keywords detected</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch28" class="nobreak">Chapter 28 — API Reference</h2>
+
+<h3>28.1 Core Signal Endpoint</h3>
+<pre><code>GET /api/v1/signal/{ticker}?horizon=1m</code></pre>
+<p>Runs full 9-agent LangGraph analysis. Horizon: <code>1d</code>, <code>1w</code>, <code>1m</code>, <code>3m</code>, <code>6m</code>, <code>1y</code> (default: <code>1m</code>).</p>
+<pre><code>{
+  "ticker": "AAPL",       "horizon": "3m",
+  "direction": "LONG",    "probability": 0.6312,
+  "base_probability": 0.5891,  "conviction": 74.2,
+  "multiplier": 0.85,    "entropy": 0.312,
+  "agents": [{ "name": "technical", "vote": "LONG",
+               "probability_up": 0.72, "confidence": 0.85,
+               "reasoning": "...", "factor_scores": {...} }],
+  "warnings": [], "holding_period": {"min_days":3,"expected_days":12,"max_days":28},
+  "summary": {"bull_agents":6,"bear_agents":2,"neutral_agents":1},
+  "latency_ms": 42300
+}</code></pre>
+
+<h3>28.2 All Endpoints</h3>
+<table>
+<tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+<tr><td>GET</td><td>/</td><td>Serves dashboard HTML</td></tr>
+<tr><td>GET</td><td>/api/v1/signal/{ticker}?horizon=</td><td>Full 9-agent signal</td></tr>
+<tr><td>GET</td><td>/api/v1/portfolio</td><td>Live portfolio positions</td></tr>
+<tr><td>POST</td><td>/api/v1/paper/signal/{ticker}</td><td>Signal + paper trade</td></tr>
+<tr><td>POST</td><td>/api/v1/backtest</td><td>Historical backtest</td></tr>
+<tr><td>POST</td><td>/api/v1/chat</td><td>LLM chat about signal</td></tr>
+<tr><td>GET</td><td>/api/v1/quant/garch/{ticker}</td><td>GARCH forecast only</td></tr>
+<tr><td>GET</td><td>/api/v1/quant/monte-carlo/{ticker}</td><td>Monte Carlo only</td></tr>
+<tr><td>GET</td><td>/api/v1/quant/evt/{ticker}</td><td>EVT tail risk only</td></tr>
+<tr><td>GET</td><td>/api/v1/chart/history/{ticker}</td><td>OHLCV bars (5m/1h/1d)</td></tr>
+<tr><td>GET</td><td>/api/v1/markets</td><td>US + global index prices</td></tr>
+<tr><td>POST</td><td>/api/v1/portfolio/add</td><td>Add position to DB</td></tr>
+<tr><td>POST</td><td>/api/v1/portfolio/close/{ticker}</td><td>Close position in DB</td></tr>
+<tr><td>GET</td><td>/api/v1/leaderboard</td><td>Agent accuracy rankings</td></tr>
+<tr><td>POST</td><td>/api/v1/optimizer</td><td>Portfolio weight optimization</td></tr>
+<tr><td>POST</td><td>/api/v1/stress-test</td><td>Scenario stress test</td></tr>
+<tr><td>WS</td><td>/ws/{ticker}</td><td>Real-time agent reasoning stream</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch29" class="nobreak">Chapter 29 — Dashboard &amp; Frontend Architecture</h2>
+
+<h3>29.1 Single-File Architecture</h3>
+<p>The entire dashboard is <code>frontend/index.html</code> (~1800 lines). All HTML, CSS, and JavaScript in one file — no build step, no npm. FastAPI serves it from <code>/</code>. Only external dependency: Lightweight Charts (TradingView) from CDN.</p>
+
+<h3>29.2 Dashboard Tabs</h3>
+<table>
+<tr><th>Tab</th><th>Key Features</th><th>Primary API</th></tr>
+<tr><td>Signal Analysis</td><td>9-agent deep research, 1D–1Y horizon selector, Top-50 company chips, smart autocomplete, TradingView chart (1D/5D/1M/3M/6M/1Y), per-agent factor detail cards</td><td>/api/v1/signal/{ticker}?horizon=</td></tr>
+<tr><td>Live Portfolio</td><td>Real-time positions, unrealized P&amp;L, portfolio composition chart, add/close positions</td><td>/api/v1/portfolio</td></tr>
+<tr><td>Paper Trading</td><td>Simulated order execution, trade log, running P&amp;L</td><td>/api/v1/paper/signal/{ticker}</td></tr>
+<tr><td>Backtest</td><td>Equity curve, Sharpe, max drawdown, win rate, trade log</td><td>/api/v1/backtest</td></tr>
+<tr><td>Walk-Forward</td><td>Rolling OOS validation, Sharpe stability chart</td><td>/api/v1/backtest (walk-forward mode)</td></tr>
+<tr><td>Stress Test</td><td>2008 crash, COVID-19, 1987, rate shock, oil shock, tech bubble scenarios</td><td>/api/v1/stress-test</td></tr>
+<tr><td>Quant Lab</td><td>Interactive GARCH, Monte Carlo visualization, EVT, Sobol QMC</td><td>/api/v1/quant/*</td></tr>
+<tr><td>Leaderboard</td><td>Agent accuracy ranking, confidence calibration, recent call history</td><td>/api/v1/leaderboard</td></tr>
+<tr><td>Optimizer</td><td>Mean-variance optimization, efficient frontier</td><td>/api/v1/optimizer</td></tr>
+</table>
+
+<h3>29.3 Key JavaScript Patterns</h3>
+<p><strong>Helper:</strong> <code>function $(id){ return document.getElementById(id); }</code></p>
+<p><strong>API wrapper:</strong> <code>async function api(path, opts)</code> wraps fetch with error handling; relative paths (no hardcoded host).</p>
+<p><strong>Chart periods:</strong> <code>CHART_PERIODS</code> array drives button rendering. <code>1d</code> → 5-minute bars (yfinance period="1d" interval="5m"). <code>5d</code> → hourly bars.</p>
+<p><strong>Company autocomplete:</strong> <code>COMPANY_DB</code> (51 entries). <code>onTickerInput()</code> — prefix match on ticker first, then substring match on company name, shows 8 results. Arrow-key navigation + Enter to select.</p>
+<p><strong>Horizon buttons:</strong> <code>sigHorizon</code> JS variable. <code>runSignal()</code> appends <code>?horizon=${sigHorizon}</code>. Active button gets class <code>hz-active</code>.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="ch30" class="nobreak">Chapter 30 — Backtesting, Walk-Forward &amp; Stress Testing</h2>
+
+<h3>30.1 Backtest Engine (backtest/engine.py)</h3>
+<p>Replays AlphaAgent signals on historical price data with realistic execution simulation.</p>
+
+<table>
+<tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
+<tr><td>initial_capital</td><td>$100,000</td><td>Starting portfolio cash</td></tr>
+<tr><td>max_position_pct</td><td>20%</td><td>Max allocation per position</td></tr>
+<tr><td>transaction_cost_bps</td><td>5 bps</td><td>Commission (0.05% one-way)</td></tr>
+<tr><td>bid_ask_spread_bps</td><td>2 bps</td><td>Slippage</td></tr>
+<tr><td>borrow_cost_annual</td><td>0.50%</td><td>Short selling borrow cost</td></tr>
+<tr><td>kelly_fraction</td><td>10%</td><td>Kelly fraction for sizing</td></tr>
+<tr><td>default_hold_days</td><td>5</td><td>Default exit horizon</td></tr>
+</table>
+
+<h4>Backtest Flow</h4>
+<ol>
+<li>Download OHLCV for all tickers in backtest universe for the period.</li>
+<li>For each date: run orchestrator on data available up to that date only (no lookahead).</li>
+<li>Position sizing: kelly_fraction × |prob_up − 0.5| × 2 × max_position_pct.</li>
+<li>Cost model: buy at <code>price × (1 + (transaction_cost + bid_ask)/10000)</code>. Sell symmetric. Short: deduct daily borrow.</li>
+<li>Exit: after default_hold_days or signal direction flip.</li>
+<li>Compute Sharpe, Sortino, max drawdown, win rate, profit factor, CAGR.</li>
+</ol>
+
+<div class="formula-box">
+\[ \text{Sharpe} = \frac{R_p - R_f}{\sigma_p}\sqrt{252} \qquad \text{Sortino} = \frac{R_p - R_f}{\sigma_\text{down}}\sqrt{252} \]
+\[ \text{Max Drawdown} = \max_{t}\frac{\text{Peak}_{[0,t]} - \text{Trough}_{[t,T]}}{\text{Peak}_{[0,t]}} \qquad \text{Profit Factor} = \frac{\sum\text{wins}}{|\sum\text{losses}|} \]
+</div>
+
+<h3>30.2 Walk-Forward Validation (backtest/walk_forward.py)</h3>
+<p>Rolling windows prevent in-sample overfitting. Training period: 1 year (252 trading days). Test period: 3 months (63 trading days). Step: 1 month.</p>
+<div class="formula-box">
+<pre>|─── Train (252d) ───|─ Test (63d) ─|
+          |─── Train (252d) ───|─ Test (63d) ─|
+                    |─── Train (252d) ───|─ Test (63d) ─|</pre>
+</div>
+<p>Key metrics: OOS Sharpe, OOS win rate, Sharpe stability (std across windows). OOS win rate &lt;50% → strategy is likely noise.</p>
+
+<h3>30.3 Stress Testing (backtest/stress_test.py)</h3>
+<table>
+<tr><th>Scenario</th><th>Key Shocks</th></tr>
+<tr><td>2008 Financial Crisis</td><td>S&amp;P −55%, VIX → 80, credit spreads +500bps</td></tr>
+<tr><td>COVID-19 Crash</td><td>S&amp;P −34% in 33 days, VIX → 85, oil −70%</td></tr>
+<tr><td>1987 Black Monday</td><td>Single-day −22.6%</td></tr>
+<tr><td>Taper Tantrum (2013)</td><td>10Y yield +1.4% in 3 months</td></tr>
+<tr><td>Rate Shock (+200bps)</td><td>10Y +2% sudden, tech P/E compression</td></tr>
+<tr><td>Oil Shock</td><td>Oil +80%, inflation +3%</td></tr>
+<tr><td>Tech Bubble Burst</td><td>Nasdaq −78% over 2 years</td></tr>
+</table>
+
+<h3>30.4 Paper Trading (trading/paper_trader.py)</h3>
+<p>Simulated brokerage in SQLite. Calls signal API → executes at current market price. Tracks open positions, realized P&amp;L, unrealized P&amp;L, trade log, daily equity curve. Primary validation step before real capital deployment.</p>
+
+<h3>30.5 RL Portfolio Rebalancer (trading/rl_rebalancer.py)</h3>
+<p>PPO-based reinforcement learning agent for portfolio rebalancing. State: current weights + recent returns + GARCH vol regime. Action: weight adjustment vector Δw. Reward: Sharpe of next N-day returns. Parameters: <code>rl.gamma = 0.99</code>, <code>rl.learning_rate = 0.0003</code>. Enhancement layer on top of the signal system — not a replacement.</p>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<h2 id="epilogue" class="nobreak">Epilogue — System Summary</h2>
+
+<p>AlphaAgent converges three intellectual traditions:</p>
+<ol>
+<li><strong>Classical Quantitative Finance:</strong> GARCH(1,1), Bayesian inference, Kelly Criterion, EVT, Kalman filtering — methods developed 1950s–1990s that remain foundational.</li>
+<li><strong>Modern Machine Learning:</strong> Hidden Markov Models, Topological Data Analysis, Hawkes processes, Quasi-Monte Carlo, Reinforcement Learning.</li>
+<li><strong>AI-Native Architecture:</strong> LangGraph multi-agent parallel orchestration, Retrieval-Augmented Generation for news sentiment, Gemini 2.0 Flash for real-time LLM inference.</li>
+</ol>
+
+<p>163 factors across 9 specialist agents → Correlation-adjusted Bayesian fusion → Time-horizon reweighting → 6-tier risk circuit breakers → Final LONG/SHORT/NEUTRAL signal with conviction score, Kelly position size, and OU-estimated holding period. Typical latency: 30–60 seconds per signal.</p>
+
+<div class="warn-box"><strong>Disclaimer:</strong> AlphaAgent is an educational system for research and learning. It is NOT financial advice, NOT a registered investment advisor, and NOT intended for live trading without extensive validation, regulatory compliance, and risk management oversight. Past backtest performance does not guarantee future results.</div>
+
+<p style="text-align:center;margin-top:40px;color:#94a3b8;font-size:9pt">AlphaAgent Technical Reference — v2.0 — Phase 6 Complete — May 2026</p>
+
+</body>
+</html>
