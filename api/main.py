@@ -71,11 +71,22 @@ paper_trader = PaperTrader()
 
 # ─── REST Endpoints ──────────────────────────────────────────────────────────
 
-_FRONTEND = Path(__file__).parent.parent / "frontend"
+_REACT_DIST = Path(__file__).parent.parent / "frontend-react" / "dist"
+_LEGACY_FRONTEND = Path(__file__).parent.parent / "frontend"
+
+# Serve React build assets
+if _REACT_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(_REACT_DIST / "assets")), name="react-assets")
 
 @app.get("/")
 async def root():
-    return FileResponse(str(_FRONTEND / "index.html"))
+    if _REACT_DIST.exists() and (_REACT_DIST / "index.html").exists():
+        return FileResponse(str(_REACT_DIST / "index.html"))
+    return FileResponse(str(_LEGACY_FRONTEND / "index.html"))
+
+@app.get("/legacy")
+async def legacy():
+    return FileResponse(str(_LEGACY_FRONTEND / "index.html"))
 
 @app.get("/api/status")
 async def status():

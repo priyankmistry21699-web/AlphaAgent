@@ -207,7 +207,7 @@ nav::-webkit-scrollbar{height:2px}
 
 /* ══════════════════════════════════════════ AI CHATBOT ══ */
 #sig-chat-panel{
-  width:300px;flex-shrink:0;
+  width:420px;flex-shrink:0;
   display:none;flex-direction:column;
   position:sticky;top:0;
   height:calc(100vh - 160px);
@@ -1571,6 +1571,279 @@ function toggleFD(name){
   if(arrow)arrow.textContent=open?'▼':'▶';
 }
 
+/* ─── Factor Deep Dive ─── */
+window._agentMap={};
+window._lastSignal=null;
+
+const FACTOR_ENC={
+  rsi:{fullName:"Relative Strength Index (RSI-14)",category:"Momentum",formula:"RSI = 100 − 100/(1 + RS)  |  RS = Avg(14-day gains) / Avg(14-day losses)",valueUnit:"0–100 oscillator",great:">65 — strong bullish momentum",good:"50–65 — positive momentum",neutral:"~50 — balanced",bad:"30–50 — bearish bias / weak trend",terrible:"<30 — oversold / potential capitulation",note:"Divergence between RSI and price is a leading reversal signal. Readings above 70 warn of near-term pullback."},
+  macd:{fullName:"MACD Histogram (12/26/9 EMA)",category:"Momentum / Trend",formula:"MACD Line = EMA(12) − EMA(26)  |  Signal = EMA(9) of MACD  |  Histogram = MACD − Signal",valueUnit:"$ price difference",great:"Positive & widening histogram (accelerating bullish momentum)",good:"Positive histogram",neutral:"Near zero, flat",bad:"Negative histogram",terrible:"Bearish crossover below zero line",note:"Histogram slope matters more than absolute level. Zero-line crossovers are high-significance signals."},
+  trend:{fullName:"ADX Trend Strength",category:"Trend",formula:"ADX = 14-period smoothed moving average of DX  |  DX = |+DI − −DI| / (+DI + −DI) × 100",valueUnit:"0–100 (trend strength)",great:">50 with bullish +DI > −DI — very strong trend",good:"25–50 with bullish alignment",neutral:"20–25 — developing trend",bad:"<20 — no clear trend (choppy)",terrible:"<20 with −DI > +DI — weak bearish chop",note:"ADX measures trend strength, NOT direction. Must check +DI vs −DI for direction."},
+  moving_averages:{fullName:"Golden / Death Cross (50/200 SMA)",category:"Trend",formula:"Golden Cross: SMA(50) crosses above SMA(200)  |  Death Cross: SMA(50) crosses below SMA(200)",valueUnit:"Score-based (crossover state)",great:"Recent Golden Cross — major bullish structural shift",good:"SMA(50) > SMA(200) — bull market structure",neutral:"Crossover imminent (within 1%)",bad:"SMA(50) < SMA(200) — bear market structure",terrible:"Recent Death Cross — major bearish structural shift",note:"These are lagging signals but historically reliable for long-term trend changes."},
+  bollinger:{fullName:"Bollinger %B Position",category:"Volatility / Mean Reversion",formula:"%B = (Price − Lower Band) / (Upper Band − Lower Band)  |  Bands = SMA(20) ± 2×σ(20)",valueUnit:"0–1 scale (0=lower band, 1=upper band)",great:"0.8–1.0 in uptrend (riding upper band)",good:"0.5–0.8 — above midline",neutral:"~0.5 — at midline (SMA 20)",bad:"0.2–0.5 — below midline",terrible:"<0.2 — near lower band (breakdown risk in downtrend)",note:"Context matters: riding the upper band in uptrend = bullish continuation; hitting lower band = potential bounce or breakdown."},
+  volume_obv:{fullName:"OBV Trend (On-Balance Volume)",category:"Volume",formula:"OBV = Cumulative sum: +Volume on up-days, −Volume on down-days",valueUnit:"Cumulative volume",great:"OBV trending up strongly — institutional accumulation",good:"OBV uptrend",neutral:"OBV flat",bad:"OBV diverging from price (price up, OBV flat = weak move)",terrible:"OBV downtrend — distribution phase",note:"OBV divergence from price action is one of the strongest leading indicators."},
+  vwap:{fullName:"VWAP Position (Volume-Weighted Avg Price)",category:"Intraday / Institutional",formula:"VWAP = Σ(Price × Volume) / Σ(Volume) over session",valueUnit:"Price relative to VWAP",great:"Price significantly above VWAP — strong institutional buying",good:"Price above VWAP",neutral:"At VWAP",bad:"Price below VWAP",terrible:"Price far below VWAP — institutional selling pressure",note:"Critical intraday institutional benchmark. Large funds often buy at VWAP, so reclaiming VWAP is bullish."},
+  stochastic:{fullName:"Stochastic %K (14,3,3)",category:"Momentum",formula:"%K = (Close − Lowest Low₁₄) / (Highest High₁₄ − Lowest Low₁₄) × 100",valueUnit:"0–100 oscillator",great:">70 & rising in uptrend, or bullish crossover from oversold",good:">50 — above midline",neutral:"~50",bad:"<50 — below midline",terrible:"<20 — oversold (bearish trend) or 80-to-20 collapse",note:"Most reliable when %K crosses %D (signal line). Overbought/oversold thresholds depend on trend context."},
+  range_52w:{fullName:"52-Week Range Position",category:"Price Strength",formula:"Position = (Price − 52W Low) / (52W High − 52W Low) × 100",valueUnit:"0–100% of 52W range",great:">80% — near 52W high (strong momentum)",good:"60–80%",neutral:"40–60%",bad:"20–40%",terrible:"<20% — near 52W low (potential value trap or downtrend)",note:"Stocks near 52W highs tend to outperform. Near 52W lows often signal ongoing weakness."},
+  atr_momentum:{fullName:"ATR-Normalized Momentum",category:"Momentum / Volatility",formula:"ATR Momentum = (Price − Price[N]) / ATR(14) — measures moves in units of volatility",valueUnit:"ATR multiples",great:">2× ATR positive move",good:"1–2× ATR positive",neutral:"<0.5× ATR",bad:"−1 to −2× ATR",terrible:"< −2× ATR",note:"Normalizes momentum by volatility. A 2% move on a 5%-ATR stock is weak; same move on a 1%-ATR stock is strong."},
+  ema200_trend:{fullName:"Price vs EMA-200 (Long-Term Trend)",category:"Trend",formula:"Signal = (Price − EMA(200)) / EMA(200) × 100 — % distance from 200-day EMA",valueUnit:"% above/below EMA-200",great:">5% above EMA-200 and rising",good:"0–5% above EMA-200",neutral:"At EMA-200 (potential support/resistance)",bad:"0–5% below EMA-200",terrible:">5% below EMA-200 — bearish long-term trend",note:"The EMA-200 is the most-watched institutional trend filter. Price below EMA-200 = bear market territory."},
+  volume_surge:{fullName:"Volume Surge Ratio",category:"Volume Confirmation",formula:"Surge = Today's Volume / 20-day Average Volume",valueUnit:"Ratio (1.0 = average)",great:">3× average volume on up-day (institutional conviction)",good:"1.5–3× on up-day",neutral:"0.8–1.2× (normal)",bad:"<0.8× on up-day (weak participation)",terrible:">2× volume on down-day (distribution / panic)",note:"Volume is the 'lie detector' of price moves. High-volume breakouts are more reliable."},
+  williams_r:{fullName:"Williams %R (14-period)",category:"Momentum",formula:"%R = (Highest High₁₄ − Close) / (Highest High₁₄ − Lowest Low₁₄) × −100",valueUnit:"−100 to 0 oscillator",great:"−20 to 0 — overbought zone in uptrend",good:"−50 to −20 — positive territory",neutral:"~−50",bad:"−80 to −50 — negative territory",terrible:"−100 to −80 — oversold (bearish trend) or −20-to-−80 collapse",note:"Similar to Stochastic but more sensitive. Best used to confirm RSI signals."},
+  ema_9_21:{fullName:"EMA 9/21 Crossover",category:"Short-Term Momentum",formula:"Bullish: EMA(9) > EMA(21) and spread widening  |  Bearish: EMA(9) < EMA(21)",valueUnit:"Score based on spread %",great:"EMA(9) recently crossed above EMA(21) — bullish short-term",good:"EMA(9) > EMA(21) and diverging",neutral:"EMA lines converging",bad:"EMA(9) < EMA(21)",terrible:"EMA(9) recently crossed below EMA(21) — bearish short-term",note:"Fast signal useful for timing entries within a larger trend identified by 50/200 crossovers."},
+  bb_bandwidth:{fullName:"Bollinger Bandwidth (Volatility Expansion)",category:"Volatility",formula:"Bandwidth = (Upper Band − Lower Band) / SMA(20)  |  Low bandwidth = 'Squeeze' (impending breakout)",valueUnit:"Fraction of SMA",great:"Post-squeeze expansion — large directional move beginning",good:"Moderate expansion with upside breakout",neutral:"Normal bandwidth",bad:"Contracting bandwidth without clear direction",terrible:"Extreme compression (high uncertainty about direction)",note:"Bollinger Squeeze precedes major moves. The direction is determined by where price breaks out."},
+  momentum_acceleration:{fullName:"Momentum Acceleration (Rate of Change of ROC)",category:"Momentum",formula:"Mom Accel = ROC(N, today) − ROC(N, yesterday)  |  Is momentum speeding up or slowing?",valueUnit:"Second derivative of price",great:"Positive and increasing — momentum gaining speed upward",good:"Positive",neutral:"Near zero (constant momentum)",bad:"Decelerating positive / mildly negative",terrible:"Strongly negative — momentum collapsing",note:"Leading indicator: deceleration often precedes reversals even while price still rises."},
+  variance_risk_premium:{fullName:"Variance Risk Premium (VRP)",category:"Options / Volatility",formula:"VRP = Implied Volatility (IV) − Realized Volatility (HV)  |  Measures options overpricing",valueUnit:"Volatility points (%)",great:"High VRP: options expensive, good for selling puts (bullish bias)",good:"Moderate VRP (5–10 vol points) — normal premium",neutral:"VRP near zero",bad:"Low/negative VRP — HV exceeds IV (realized vol surprises market)",terrible:"Very negative VRP — extreme realized vol spike (crash/crisis)",note:"Persistent high VRP means options sellers collect premium. Low VRP = cheap options, potential large moves ahead."},
+  hurst:{fullName:"Hurst Exponent (Long-Memory)",category:"Statistical / Mean Reversion",formula:"H estimated via rescaled range analysis  |  H>0.5: trending  |  H=0.5: random walk  |  H<0.5: mean-reverting",valueUnit:"0–1 exponent",great:">0.65 — strong persistent trend (trending asset)",good:"0.55–0.65 — mild persistence",neutral:"~0.5 — random walk",bad:"0.4–0.5 — mild mean reversion",terrible:"<0.4 — strong mean reversion (difficult to trend-follow)",note:"H>0.6 is rare and indicates genuine trend persistence. Most equity returns H≈0.5–0.55."},
+  momentum_12m_1m:{fullName:"12M-1M Cross-Sectional Momentum",category:"Momentum",formula:"Return(12 months) minus Return(last 1 month)  |  Avoids short-term reversal contamination",valueUnit:"% return",great:">30% 12M-1M momentum — top momentum decile",good:"15–30%",neutral:"0–15%",bad:"−15–0% (negative momentum)",terrible:"< −15% — strong downward momentum",note:"Jegadeesh-Titman (1993) anomaly. 12M-1M momentum predicts 1–6 month forward returns. Skip last month avoids reversal."},
+  hmm_regime:{fullName:"Hidden Markov Model Market Regime",category:"Regime Detection",formula:"HMM with 3 states (Bull/Bear/Volatile) fit to 252-day returns and volatility via Baum-Welch EM",valueUnit:"Regime probability (0–1)",great:"Bull regime probability >0.75 — high-confidence bull market",good:"Bull regime probable (0.55–0.75)",neutral:"Mixed regime signal",bad:"Volatile/uncertain regime",terrible:"Bear regime probability >0.75 — confirmed bear market",note:"HMM captures non-linear regime shifts that moving averages miss. Regime changes are the key signal."},
+  tda_regime:{fullName:"TDA Persistent Homology (Topological Signal)",category:"Topology / Advanced",formula:"Computes H₁ persistent homology on price manifold. Betti number ≠ 0 indicates structural market cycles",valueUnit:"Topological persistence score",great:"Low persistence (smooth, monotone uptrend detected)",good:"Moderate persistence — mild oscillation in uptrend",neutral:"Average persistence",bad:"High persistence — complex cyclic structure, choppy market",terrible:"Extreme topological complexity — potential regime instability",note:"TDA captures market structure invisible to linear methods. High loop persistence = complex market dynamics."},
+  iv_skew:{fullName:"IV Skew (25Δ Put-Call, Volatility Skew)",category:"Options / Sentiment",formula:"Skew = IV(25Δ Put) − IV(25Δ Call)  |  Measures demand for downside protection vs upside calls",valueUnit:"Volatility points",great:"Skew falling (put premium dropping) — fear subsiding, bullish",good:"Normal negative skew (puts slightly expensive, normal market)",neutral:"Zero skew",bad:"High put skew — elevated fear / hedge demand",terrible:"Extreme put skew > 10 vol pts — crash fears, institutional hedging",note:"Rising skew = smart money buying protection. Falling skew after fear = bullish contrarian signal."},
+  gamma_exposure:{fullName:"Gamma Exposure (GEX, Dealer Net Gamma)",category:"Options / Market Microstructure",formula:"GEX = Σ(Gamma × Open Interest × 100 × Spot²) across all strikes and expiries",valueUnit:"$ billions",great:"Strong positive GEX — dealers buy dips and sell rallies (stabilizing)",good:"Moderate positive GEX — dampened volatility environment",neutral:"Near zero",bad:"Negative GEX — dealers amplify moves in both directions",terrible:"Large negative GEX — dealers must sell into declines (acceleration risk)",note:"The 'gamma flip' level where GEX crosses zero is a critical technical level. Below it, moves accelerate."},
+  max_pain:{fullName:"Options Max Pain Strike",category:"Options",formula:"Max Pain = strike price where aggregate options losses for holders are maximized (market makers profit)",valueUnit:"% distance from max pain",great:"Price well above max pain — bullish call momentum",good:"Price slightly above max pain",neutral:"Price near max pain (possible pin)",bad:"Price below max pain — put pressure",terrible:"Price far below max pain — put buyers in control, bearish",note:"Options market makers hedge dynamically. Price gravitates toward max pain near expiry."},
+  implied_correlation:{fullName:"Implied Correlation (SPX vs Stock IV)",category:"Market Stress / Systemic Risk",formula:"Proxy: Correlation = (IV_SPX² − Avg(IV_stock²)) / 2×Avg(IV_stock×IV_SPX)  |  High correlation = risk-off",valueUnit:"0–1 correlation",great:"<0.4 — idiosyncratic stock behavior, alpha opportunity",good:"0.4–0.55 — moderate market correlation",neutral:"~0.5",bad:"0.55–0.7 — high correlation, market-driven moves",terrible:">0.7 — 'everything falls together', crisis correlation",note:"During crashes, correlations spike to 1 as all assets move together. Low correlation = stock-picker's market."},
+  pca_signal_quality:{fullName:"PCA Signal Quality Score",category:"Statistical Quality",formula:"Runs PCA on all agent's factor scores. Quality = variance explained by PC1 / total variance",valueUnit:"0–100 quality score",great:">75 — high signal coherence, factors agree",good:"60–75 — good coherence",neutral:"50–60",bad:"40–50 — noisy, factors disagree",terrible:"<40 — very noisy signal, low confidence",note:"PCA quality measures how well-aligned the factors are. Low quality = mixed signals, reduce position size."},
+  // Fundamental
+  piotroski:{fullName:"Piotroski F-Score (9-point Financial Health)",category:"Fundamental Quality",formula:"9 binary signals across Profitability (4), Leverage (3), Operating Efficiency (2). Sum = 0–9",valueUnit:"0–9 score",great:"8–9 — strong buy signal, excellent financial health",good:"6–7 — healthy company",neutral:"5",bad:"3–4 — weak financial condition",terrible:"0–2 — distressed, high bankruptcy risk",note:"Piotroski (2000) showed top-F-score longs beat bottom-F-score shorts by 23% annually."},
+  altman:{fullName:"Altman Z-Score (Bankruptcy Predictor)",category:"Fundamental / Risk",formula:"Z = 1.2×WC/TA + 1.4×RE/TA + 3.3×EBIT/TA + 0.6×MVE/TL + 1.0×Sales/TA",valueUnit:"Score (higher = safer)",great:">3.0 — safe zone, very low bankruptcy risk",good:"2.6–3.0 — gray zone upper",neutral:"1.8–2.6 — gray zone (caution)",bad:"1.1–1.8 — distress zone",terrible:"<1.1 — high bankruptcy probability",note:"Altman's original 1968 model still remarkably accurate. Score < 1.8 historically → 94% bankruptcy rate."},
+  beneish:{fullName:"Beneish M-Score (Earnings Manipulation Detector)",category:"Fundamental Quality",formula:"M = −4.84 + 0.92×DSRI + 0.528×GMI + 0.404×AQI + 0.892×SGI + 0.115×DEPI − 0.172×SGAI + 4.679×TATA − 0.327×LVGI",valueUnit:"Score (more negative = cleaner)",great:"< −2.5 — unlikely manipulator (honest accounting)",good:"−2.5 to −2.0 — low manipulation probability",neutral:"−2.0 to −1.78",bad:"−1.78 to −1.0 — possible manipulation",terrible:">−1.78 — strong manipulation indicator",note:"Messod Beneish (1999). Score > −1.78: 76% sensitivity for detecting accounting fraud."},
+  pe_ratio:{fullName:"P/E Ratio (Price-to-Earnings, Trailing)",category:"Valuation",formula:"P/E = Market Price / Trailing 12-Month EPS",valueUnit:"Multiple (×)",great:"<15× — undervalued vs historical average",good:"15–20× — fair value",neutral:"20–25× — slightly elevated",bad:"25–35× — expensive",terrible:">35× — very expensive / bubble risk",note:"P/E varies by sector. Tech commands higher multiples than utilities. Compare to sector peers and historical range."},
+  forward_pe:{fullName:"Forward P/E (Next 12 Months EPS Estimate)",category:"Valuation",formula:"Forward P/E = Current Price / Consensus Next-12M EPS Estimate",valueUnit:"Multiple (×)",great:"<12× forward P/E vs sector — deep value",good:"12–18× — reasonable",neutral:"18–22×",bad:"22–30× — stretched expectations",terrible:">30× — priced for perfection",note:"Forward P/E depends on estimate accuracy. Beat-and-raise cycles expand forward P/E favorably."},
+  pb_ratio:{fullName:"Price-to-Book Ratio",category:"Valuation",formula:"P/B = Market Cap / Book Value of Equity",valueUnit:"Multiple (×)",great:"<1.0× — trading below book value",good:"1.0–2.0× — value zone",neutral:"2.0–3.0×",bad:"3.0–5.0× — growth premium",terrible:">5× — intangible-heavy or overvalued",note:"P/B<1 can signal value opportunity OR distress. Best combined with ROE: high ROE + moderate P/B = ideal."},
+  fcf_yield:{fullName:"Free Cash Flow Yield",category:"Valuation / Quality",formula:"FCF Yield = Free Cash Flow / Market Cap = (Operating Cash Flow − CapEx) / Market Cap",valueUnit:"% yield",great:">8% — very cheap, strong cash generation",good:"5–8% — attractive",neutral:"3–5%",bad:"1–3% — low yield, expensive",terrible:"<0% — negative FCF (burning cash)",note:"Buffett's preferred valuation metric. FCF yield > 10-year Treasury yield = stock may outperform bonds."},
+  roe:{fullName:"Return on Equity (ROE)",category:"Profitability",formula:"ROE = Net Income / Average Shareholders' Equity × 100%",valueUnit:"% annual return",great:">20% — exceptional capital efficiency",good:"15–20% — strong",neutral:"10–15%",bad:"5–10% — below average",terrible:"<5% or negative — poor capital allocation",note:"Buffett's favorite metric. Sustainable high ROE (>20% for 5+ years) = durable competitive advantage."},
+  accruals_ratio:{fullName:"Accruals Ratio (Earnings Quality)",category:"Earnings Quality",formula:"Accruals Ratio = (Net Income − CFO) / Avg Net Assets  |  High ratio = earnings not backed by cash",valueUnit:"Ratio",great:"< −0.1 — earnings significantly backed by cash (high quality)",good:"−0.1 to 0.0 — good earnings quality",neutral:"0.0 to 0.05",bad:"0.05 to 0.1 — moderate accruals warning",terrible:">0.1 — earnings largely accrual-based, risk of reversal",note:"Richardson et al. (2005): high-accruals firms underperform by 14% annually. Accruals erode in next 1-3 years."},
+  // Macro
+  recession_risk:{fullName:"Recession Risk Probability",category:"Macro",formula:"Composite of: yield curve inversion depth, ISM PMI level, unemployment claims trend, LEI index",valueUnit:"0–100 probability",great:"<15% — expansion phase, low risk",good:"15–30% — mild slowdown risk",neutral:"30–50%",bad:"50–70% — significant recession risk",terrible:">70% — high recession probability",note:"Recessions historically mean −30% or worse S&P 500 drawdowns. Best to reduce equity exposure above 60%."},
+  yield_curve:{fullName:"Yield Curve Spread (10Y−2Y Treasury)",category:"Macro / Fixed Income",formula:"Spread = 10-Year Treasury Yield − 2-Year Treasury Yield",valueUnit:"Basis points (bps)",great:">100 bps — steep curve, strong economic growth",good:"50–100 bps — positive curve, healthy",neutral:"0–50 bps — flat",bad:"−50 to 0 bps — inversion beginning",terrible:"< −50 bps — deeply inverted, recession signal (avg 12-18 months lead time)",note:"Every U.S. recession since 1955 was preceded by yield curve inversion. −50bps+ = very strong recession warning."},
+  vix:{fullName:"VIX (CBOE Volatility Index, 'Fear Gauge')",category:"Sentiment / Volatility",formula:"VIX = 30-day expected S&P 500 volatility derived from options prices across all strikes",valueUnit:"Annualized volatility %",great:"<15 — complacency / low fear, risk-on environment",good:"15–20 — normal low-vol environment",neutral:"20–25 — moderate uncertainty",bad:"25–35 — elevated fear",terrible:">35 — extreme fear / crash conditions",note:"VIX>30 historically is a contrarian BUY signal for long-term investors. VIX spikes are mean-reverting."},
+  dxy_regime:{fullName:"US Dollar Index (DXY) Regime",category:"Macro / Currency",formula:"DXY trend vs 50-day and 200-day moving averages. Strong dollar = headwind for commodities and EM assets",valueUnit:"USD trend score",great:"Weak/falling dollar — bullish for risk assets, EM, commodities",good:"Mild dollar weakness",neutral:"Dollar stable",bad:"Dollar strength — headwind for non-US earnings",terrible:"Very strong dollar — EM crisis risk, commodity selloff, earnings translation headwind",note:"70%+ of S&P 500 revenue is domestic, but strong USD hurts multinationals and EM allocations."},
+  kl_divergence:{fullName:"KL Divergence (Return Distribution Shift)",category:"Risk / Regime Change",formula:"KL(P||Q) = Σ P(x)·log(P(x)/Q(x))  |  P = 20-day recent returns, Q = 252-day baseline returns (20 bins)",valueUnit:"Nats (information units)",great:"<0.05 — distribution stable, consistent regime",good:"0.05–0.15 — minor distribution shift",neutral:"0.15–0.30",bad:"0.30–0.60 — significant regime change detected",terrible:">0.60 — major distribution shift, unusual market behavior",note:"High KL divergence signals that recent price behavior differs materially from historical norms — regime alert."},
+  hawkes_intensity:{fullName:"Hawkes Process Branching Ratio",category:"Market Microstructure",formula:"α/β ratio from Ozaki (1979) MLE. Measures self-excitation: how much each event triggers more events",valueUnit:"Ratio (0–1)",great:"<0.3 — events are mostly exogenous, independent shocks",good:"0.3–0.5 — moderate self-excitation",neutral:"~0.5",bad:"0.5–0.7 — high clustering of events (vol feedback loop building)",terrible:">0.7 — near-explosive branching (flash crash risk zone)",note:"Branching ratio > 0.9 historically precedes market microstructure instabilities and flash crashes."},
+  quasi_mc_var:{fullName:"Quasi-Monte Carlo VaR (Sobol Sequences, 4096 paths)",category:"Risk",formula:"Uses Sobol low-discrepancy sequences (2¹² = 4096 paths) for superior coverage vs pseudorandom MC. VaR at 95%",valueUnit:"% portfolio loss at 95% confidence",great:"<2% VaR — very low tail risk",good:"2–5% — manageable risk",neutral:"5–8%",bad:"8–15% — high tail risk",terrible:">15% VaR — extreme tail risk, significant drawdown likely",note:"Sobol sequences fill the probability space ~10× more efficiently than random sampling, giving more accurate tail estimates."},
+  kelly:{fullName:"Kelly Fraction (Optimal Position Size)",category:"Risk / Portfolio",formula:"f* = (p×b − q) / b  |  p = win probability, q = 1−p, b = win/loss ratio (from MC simulation)",valueUnit:"Fraction of capital (0–1)",great:">0.25 — high edge, significant position justified",good:"0.15–0.25 — clear edge",neutral:"0.10–0.15",bad:"0.05–0.10 — marginal edge",terrible:"<0.05 or negative — no edge, avoid or short",note:"AlphaAgent uses half-Kelly for risk management. Full Kelly is theoretically optimal but too volatile in practice."},
+  news_sentiment:{fullName:"News Sentiment Score (NLP Analysis)",category:"Sentiment",formula:"Aggregates FinBERT/news scores across recent headlines. Weighted by source credibility and recency",valueUnit:"−1 to +1 sentiment",great:">0.5 — strongly positive news flow",good:"0.2–0.5 — mildly positive",neutral:"−0.2 to 0.2",bad:"−0.5 to −0.2 — negative news pressure",terrible:"< −0.5 — very negative news, potential escalating negative catalyst",note:"News sentiment has ~1–3 day alpha decay. Most relevant at announcement events."},
+  short_interest:{fullName:"Short Interest / Float %",category:"Sentiment / Short Squeeze",formula:"Short Interest % = Shares Sold Short / Float Shares × 100%",valueUnit:"% of float",great:"<5% — low short interest, clean technical action",good:"5–10% — moderate",neutral:"10–15%",bad:"15–25% — heavy short interest, headwind",terrible:">25% — extremely high short interest (squeeze risk OR fundamental problem)",note:"High short interest is a double-edged sword: headwind for performance but fuel for short squeezes on positive catalysts."},
+  insider_sentiment:{fullName:"Net Insider Sentiment (Buy/Sell Ratio)",category:"Insider Activity",formula:"Ratio = Insider Buys (value) / (Insider Buys + Sells) from SEC Form 4 filings",valueUnit:"Ratio 0–1",great:">0.7 — strong insider buying, major vote of confidence",good:"0.55–0.7 — net buying",neutral:"0.4–0.55 — balanced",bad:"0.25–0.4 — net selling",terrible:"<0.25 — heavy insider selling, red flag",note:"Open-market purchases are most bullish (insiders risking own capital). Automatic 10b5-1 sales are less bearish."},
+  kyle_lambda:{fullName:"Kyle's Lambda (Price Impact Coefficient)",category:"Market Microstructure / Liquidity",formula:"λ = Cov(ΔPrice, Signed Order Flow) / Var(Signed Order Flow)  |  Kyle (1985) market impact model",valueUnit:"$/share per $1M order flow",great:"Very low λ — deep liquid market, minimal price impact",good:"Low-moderate λ",neutral:"Average λ",bad:"High λ — illiquid, large orders move price significantly",terrible:"Extreme λ — micro-cap / illiquid stock, adverse selection risk",note:"Kyle's lambda is the definitive measure of market depth. High lambda = informed traders have outsized advantage."},
+  garch_vol:{fullName:"GARCH(1,1) Volatility Forecast",category:"Volatility",formula:"σ²ₜ = ω + α·ε²ₜ₋₁ + β·σ²ₜ₋₁  |  Typical params: α+β ≈ 0.97 (high persistence)",valueUnit:"Annualized volatility %",great:"GARCH < 15% — calm, trending environment",good:"15–25% — normal volatility range",neutral:"25–35%",bad:"35–50% — elevated vol, more uncertainty",terrible:">50% — crisis-level volatility",note:"GARCH captures volatility clustering: calm periods follow calm, volatile periods follow volatile (Mandelbrot 1963)."},
+  oil_shock:{fullName:"Oil Shock Impact (Brent Crude Sensitivity)",category:"Geopolitical / Macro",formula:"30-day Brent return × stock-to-oil beta from rolling 60-day regression",valueUnit:"Impact score",great:"Oil falling, stock has negative oil beta (consumer/airline) — tailwind",good:"Oil stable or mild move, low sensitivity",neutral:"No significant oil exposure",bad:"Oil rising, stock has positive oil beta (oil producer facing supply concerns) OR consumer facing cost pressure",terrible:"Extreme oil spike, significant oil beta",note:"Brent >$100 historically increases recession probability. Airlines and chemicals most exposed on cost side."},
+  oil_price_direct:{fullName:"Brent Crude Direct Price Signal",category:"Macro / Commodity",formula:"Brent price trend (30-day) vs 50-day MA. Used for oil-sector stocks or macro correlation",valueUnit:"Brent 30-day % change",great:"Oil rallying >10% — strong tailwind for energy sector",good:"Oil up 3–10%",neutral:"Oil flat ±3%",bad:"Oil down 3–10%",terrible:"Oil crashing > −10%",note:"WTI/Brent divergence signals supply disruptions. Geopolitical risk premium drives short-term spikes."},
+  gpr_index:{fullName:"GPR Index (Caldara-Iacoviello Geopolitical Risk)",category:"Geopolitical",formula:"Text-based measure from 11 major newspapers. Counts geopolitical threat/act/risk words. Normalized to 100=average",valueUnit:"Index level (100 = historical avg)",great:"<75 — low geopolitical tensions, risk-on",good:"75–100 — normal baseline",neutral:"100–125",bad:"125–175 — elevated tensions",terrible:">200 — major geopolitical crisis",note:"Caldara & Iacoviello (2022). GPR spikes precede equity selloffs and flight-to-safety in Treasuries/gold."},
+  iv_vs_rv:{fullName:"IV vs Realized Volatility Ratio",category:"Volatility",formula:"Ratio = 30-day Implied Vol / 30-day Realized Vol (Historical Vol). > 1 = options rich",valueUnit:"Ratio",great:"<0.85 — options cheap relative to realized, good to buy calls",good:"0.85–1.0 — options fairly priced",neutral:"~1.0",bad:"1.0–1.3 — options mildly expensive",terrible:">1.3 — options very expensive, event risk priced in",note:"High IV/RV ratio = fear premium in options. Mean-reverts after events resolve."},
+  vix_term_structure:{fullName:"VIX Term Structure (Contango vs Backwardation)",category:"Volatility",formula:"VX1/VX2 ratio. Contango (VX1<VX2) = normal upward-sloping. Backwardation (VX1>VX2) = stress",valueUnit:"Ratio front/back month",great:"Deep contango (ratio <0.90) — calm market, vol sellers winning",good:"Normal contango (0.90–0.97)",neutral:"~1.0 — flat",bad:"Backwardation beginning (>1.0) — near-term stress",terrible:">1.10 backwardation — crisis conditions, VIX spike ongoing",note:"VIX curve backwardation has historically been a short-term buy signal after fear peak passes."},
+};
+
+function openDeepDive(agentName, evt) {
+  if(evt){evt.stopPropagation();}
+  const a=window._agentMap?.[agentName];
+  const sig=window._lastSignal;
+  if(!a)return;
+  const factors=Object.entries(a.factor_scores||{});
+  const ticker=window._chatTicker||'—';
+  const hzLabel=HZ_LABELS[sig?.horizon||'1m']||'1 Month';
+  const vote=(a.vote||'HOLD').toUpperCase();
+  const voteColor=vote==='LONG'?'#00d68f':vote==='SHORT'?'#f5365c':'#ffb703';
+  const prob=((a.probability_up||0.5)*100).toFixed(1);
+  const conf=((a.confidence||0)*100).toFixed(0);
+  const ms=(a.computation_time_ms||0).toFixed(0);
+  const reasoning=a.reasoning||'No reasoning provided.';
+
+  const factorCards=factors.map(([key,f])=>{
+    const sc=f.score??50;
+    const scColor=sc>=66?'#00d68f':sc<=33?'#f5365c':'#ffb703';
+    const enc=FACTOR_ENC[key]||{};
+    const rawVal=typeof f.value==='number'?
+      (Math.abs(f.value)>=1000?f.value.toLocaleString('en-US',{maximumFractionDigits:0}):
+       Math.abs(f.value)<0.01&&f.value!==0?f.value.toExponential(2):f.value.toFixed(3))
+      :String(f.value??'—');
+    const signal=sc>=66?'BULLISH':sc<=33?'BEARISH':'NEUTRAL';
+    const sigColor=sc>=66?'#00d68f':sc<=33?'#f5365c':'#ffb703';
+    const bgColor=sc>=66?'rgba(0,214,143,0.06)':sc<=33?'rgba(245,54,92,0.06)':'rgba(255,183,3,0.04)';
+    const borderColor=sc>=66?'rgba(0,214,143,0.25)':sc<=33?'rgba(245,54,92,0.25)':'rgba(255,183,3,0.15)';
+    const rangeRows=enc.great||enc.good?`
+      <table class="range-table">
+        <tr><td class="range-badge great">●</td><td class="range-label">GREAT</td><td>${enc.great||'—'}</td></tr>
+        <tr><td class="range-badge good">●</td><td class="range-label">GOOD</td><td>${enc.good||'—'}</td></tr>
+        <tr><td class="range-badge neutral">●</td><td class="range-label">NEUTRAL</td><td>${enc.neutral||'—'}</td></tr>
+        <tr><td class="range-badge bad">●</td><td class="range-label">BAD</td><td>${enc.bad||'—'}</td></tr>
+        <tr><td class="range-badge terrible">●</td><td class="range-label">TERRIBLE</td><td>${enc.terrible||'—'}</td></tr>
+      </table>`:
+      `<div class="no-enc">Range data not available for this factor.</div>`;
+    return `<div class="fc" style="background:${bgColor};border:1px solid ${borderColor}">
+      <div class="fc-header">
+        <div>
+          <div class="fc-name">${f.name||key}</div>
+          ${enc.fullName&&enc.fullName!==f.name?`<div class="fc-fullname">${enc.fullName}</div>`:''}
+          ${enc.category?`<span class="fc-cat">${enc.category}</span>`:''}
+        </div>
+        <div class="fc-right">
+          <div class="fc-signal" style="color:${sigColor};background:${sigColor}18;border-color:${sigColor}33">${signal}</div>
+          <div class="fc-score" style="color:${scColor}">${sc.toFixed(0)}<span class="fc-score-max">/100</span></div>
+        </div>
+      </div>
+      <div class="fc-score-bar">
+        <div class="fc-bar-bg">
+          <div class="fc-bar-zone bad-zone"></div>
+          <div class="fc-bar-zone neutral-zone"></div>
+          <div class="fc-bar-zone good-zone"></div>
+        </div>
+        <div class="fc-bar-fill" style="width:${sc}%;background:${scColor}"></div>
+        <div class="fc-bar-pointer" style="left:${sc}%"></div>
+        <div class="fc-bar-labels"><span>0 Bearish</span><span>50 Neutral</span><span>Bullish 100</span></div>
+      </div>
+      <div class="fc-body">
+        <div class="fc-value-row">
+          <span class="fc-value-label">Current Value</span>
+          <span class="fc-value-num">${rawVal}${enc.valueUnit?` <span class="fc-unit">${enc.valueUnit}</span>`:''}</span>
+        </div>
+        ${enc.formula?`<div class="fc-formula">📐 ${enc.formula}</div>`:''}
+        <div class="fc-interp">${f.interpretation||'—'}</div>
+        ${rangeRows}
+        ${enc.note?`<div class="fc-note">💡 ${enc.note}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const html=`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Factor Deep Dive — ${agentName} — ${ticker}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#07111f;color:#e4ecf7;font-size:13px;line-height:1.6;min-height:100vh}
+a{color:inherit}
+/* Header */
+.page-header{background:linear-gradient(135deg,#0c1a2e,#111f35);border-bottom:1px solid #1c2f4a;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.ph-left{display:flex;align-items:center;gap:12px}
+.ph-brand{font-size:20px;font-weight:900;background:linear-gradient(135deg,#3d9eff,#7b5ea7);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.ph-sep{color:#1c2f4a;font-size:20px}
+.ph-agent{font-size:16px;font-weight:700;color:#e4ecf7}
+.ph-ticker{font-size:12px;color:#5d7ba0;background:#0c1a2e;padding:3px 10px;border-radius:20px;border:1px solid #1c2f4a}
+.ph-horizon{font-size:11px;color:#06c8f0}
+/* Agent card */
+.agent-card{margin:20px 24px;background:#0c1a2e;border-radius:14px;border:1px solid #1c2f4a;overflow:hidden}
+.agent-card-header{padding:16px 20px;border-bottom:1px solid #1c2f4a;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.vote-badge{padding:6px 16px;border-radius:20px;font-size:13px;font-weight:800;letter-spacing:.05em}
+.ac-metrics{display:flex;gap:20px;flex:1}
+.ac-metric{text-align:center}
+.ac-metric-val{font-size:20px;font-weight:800}
+.ac-metric-lbl{font-size:10px;color:#5d7ba0;text-transform:uppercase;letter-spacing:.08em}
+.agent-card-body{padding:16px 20px}
+.reasoning-label{font-size:10px;font-weight:700;color:#5d7ba0;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.reasoning-text{font-size:12.5px;color:#8da3c0;line-height:1.7;background:#07111f;padding:14px;border-radius:8px;border-left:3px solid #3d9eff}
+/* Factors grid */
+.section-title{padding:0 24px 12px;font-size:11px;font-weight:700;color:#5d7ba0;text-transform:uppercase;letter-spacing:.1em;display:flex;align-items:center;gap:8px}
+.factors-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:16px;padding:0 24px 24px}
+.fc{border-radius:12px;overflow:hidden;transition:transform .2s}
+.fc:hover{transform:translateY(-2px)}
+.fc-header{display:flex;justify-content:space-between;align-items:flex-start;padding:14px 16px 10px;gap:12px}
+.fc-name{font-size:13px;font-weight:700;color:#e4ecf7}
+.fc-fullname{font-size:10px;color:#5d7ba0;margin-top:2px}
+.fc-cat{font-size:9px;font-weight:700;color:#06c8f0;background:#06c8f015;padding:2px 7px;border-radius:10px;border:1px solid #06c8f025;margin-top:5px;display:inline-block;letter-spacing:.06em}
+.fc-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+.fc-signal{font-size:9px;font-weight:800;padding:3px 8px;border-radius:8px;border:1px solid;letter-spacing:.07em}
+.fc-score{font-size:24px;font-weight:900;line-height:1}
+.fc-score-max{font-size:12px;color:#5d7ba0;font-weight:400}
+/* Score bar */
+.fc-score-bar{padding:4px 16px 12px;position:relative}
+.fc-bar-bg{height:8px;border-radius:4px;display:flex;overflow:hidden;background:#0d1825}
+.fc-bar-zone{height:100%}
+.bad-zone{width:33%;background:rgba(245,54,92,.2)}
+.neutral-zone{width:34%;background:rgba(255,183,3,.15)}
+.good-zone{width:33%;background:rgba(0,214,143,.2)}
+.fc-bar-fill{position:absolute;top:4px;left:16px;height:8px;border-radius:4px;transition:width .6s;right:16px;width:0;max-width:calc(100% - 32px)}
+.fc-bar-pointer{position:absolute;top:1px;width:3px;height:14px;background:#fff;border-radius:2px;transform:translateX(-50%);transition:left .6s;box-shadow:0 0 6px rgba(255,255,255,.5)}
+.fc-bar-labels{display:flex;justify-content:space-between;font-size:9px;color:#5d7ba0;margin-top:4px;padding:0 2px}
+/* Factor body */
+.fc-body{padding:0 16px 14px;display:flex;flex-direction:column;gap:8px}
+.fc-value-row{display:flex;align-items:center;justify-content:space-between}
+.fc-value-label{font-size:10px;color:#5d7ba0;font-weight:600}
+.fc-value-num{font-size:14px;font-weight:700;color:#e4ecf7;font-family:monospace}
+.fc-unit{font-size:10px;color:#5d7ba0;font-weight:400;font-family:inherit}
+.fc-formula{font-size:10.5px;color:#8da3c0;background:#07111f;padding:8px 10px;border-radius:6px;border-left:3px solid #3d9eff;font-family:'Courier New',monospace;line-height:1.5}
+.fc-interp{font-size:11px;color:#8da3c0;font-style:italic}
+/* Range table */
+.range-table{width:100%;border-collapse:collapse;font-size:10.5px}
+.range-table td{padding:3px 6px;vertical-align:top}
+.range-badge{font-size:10px;width:20px}
+.range-label{font-weight:700;width:60px;color:#5d7ba0;text-transform:uppercase;font-size:9px;letter-spacing:.05em}
+.range-badge.great{color:#00d68f}
+.range-badge.good{color:#22c55e}
+.range-badge.neutral{color:#ffb703}
+.range-badge.bad{color:#f97316}
+.range-badge.terrible{color:#f5365c}
+.fc-note{font-size:10.5px;color:#5d7ba0;padding:7px 10px;background:#0d1825;border-radius:6px;border-left:3px solid #7b5ea7}
+.no-enc{font-size:10px;color:#5d7ba0;font-style:italic}
+/* Agent summary footer */
+.summary-footer{margin:0 24px 24px;background:linear-gradient(135deg,#0c1a2e,#111f35);border-radius:12px;border:1px solid #1c2f4a;padding:16px 20px}
+.sf-title{font-size:11px;font-weight:700;color:#5d7ba0;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px}
+.sf-score-row{display:flex;gap:16px;margin-top:10px}
+.sf-score{text-align:center;flex:1;background:#07111f;border-radius:8px;padding:10px}
+.sf-score-val{font-size:18px;font-weight:800}
+.sf-score-lbl{font-size:9px;color:#5d7ba0;text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+@media print{body{background:#fff;color:#000} .page-header{position:static}}
+</style>
+</head>
+<body>
+<div class="page-header">
+  <div class="ph-left">
+    <span class="ph-brand">AlphaAgent</span>
+    <span class="ph-sep">|</span>
+    <span class="ph-agent">${agentName}</span>
+    <span class="ph-ticker">${ticker}</span>
+    <span class="ph-horizon">${hzLabel} Horizon</span>
+  </div>
+  <span style="font-size:10px;color:#5d7ba0">Factor Deep Dive — ${factors.length} factors analyzed</span>
+</div>
+
+<div class="agent-card">
+  <div class="agent-card-header">
+    <div class="vote-badge" style="color:${voteColor};background:${voteColor}18;border:1.5px solid ${voteColor}44">${vote}</div>
+    <div class="ac-metrics">
+      <div class="ac-metric"><div class="ac-metric-val" style="color:${voteColor}">${prob}%</div><div class="ac-metric-lbl">P(Up)</div></div>
+      <div class="ac-metric"><div class="ac-metric-val" style="color:#06c8f0">${conf}%</div><div class="ac-metric-lbl">Confidence</div></div>
+      <div class="ac-metric"><div class="ac-metric-val" style="color:#5d7ba0">${ms}ms</div><div class="ac-metric-lbl">Compute</div></div>
+      <div class="ac-metric"><div class="ac-metric-val" style="color:#a78bfa">${factors.length}</div><div class="ac-metric-lbl">Factors</div></div>
+    </div>
+  </div>
+  <div class="agent-card-body">
+    <div class="reasoning-label">Agent Reasoning (Full)</div>
+    <div class="reasoning-text">${reasoning}</div>
+  </div>
+</div>
+
+<div class="section-title">📊 Factor Analysis — ${factors.length} factors · Each factor scored 0–100 (0=Bearish, 50=Neutral, 100=Bullish)</div>
+<div class="factors-grid">${factorCards}</div>
+
+<div class="summary-footer">
+  <div class="sf-title">Agent Composite Summary</div>
+  <div style="font-size:12px;color:#8da3c0;line-height:1.7">${reasoning}</div>
+  <div class="sf-score-row">
+    <div class="sf-score"><div class="sf-score-val" style="color:${voteColor}">${vote}</div><div class="sf-score-lbl">Direction</div></div>
+    <div class="sf-score"><div class="sf-score-val" style="color:${voteColor}">${prob}%</div><div class="sf-score-lbl">P(Up) Probability</div></div>
+    <div class="sf-score"><div class="sf-score-val" style="color:#06c8f0">${conf}%</div><div class="sf-score-lbl">Confidence</div></div>
+    <div class="sf-score"><div class="sf-score-val" style="color:#a78bfa">${factors.filter(([,f])=>(f.score??50)>=66).length}/${factors.length}</div><div class="sf-score-lbl">Bullish Factors</div></div>
+  </div>
+</div>
+<script>
+// Animate bars after load
+window.addEventListener('load',()=>{
+  document.querySelectorAll('.fc-bar-fill,.fc-bar-pointer').forEach(el=>{el.style.transition='none';});
+  requestAnimationFrame(()=>{
+    document.querySelectorAll('.fc-bar-fill,.fc-bar-pointer').forEach(el=>{el.style.transition='';});
+  });
+});
+</script>
+</body></html>`;
+
+  const w=window.open('','_blank');
+  if(!w){alert('Please allow popups to view Factor Deep Dive.');return;}
+  w.document.write(html);
+  w.document.close();
+}
+
 /* ─── Horizon selector ─── */
 let sigHorizon = '1m';
 const HZ_LABELS = { '1d':'1 Day','1w':'1 Week','1m':'1 Month','3m':'3 Months','6m':'6 Months','1y':'1 Year' };
@@ -2228,6 +2501,11 @@ function renderSignal(d,ticker){
 
   const warnHtml=warns.map(w=>`<div class="warn-banner">⚠ ${w}</div>`).join('');
 
+  // Store for Deep Dive
+  window._agentMap={};
+  window._lastSignal=d;
+  agents.forEach(a=>{window._agentMap[a.agent_name||a.name||'Unknown']=a;});
+
   const agentRows=agents.map(a=>{
     const v=dirClean(a.vote);
     const p=a.probability_up??0.5;
@@ -2307,7 +2585,16 @@ function renderSignal(d,ticker){
         <div style="display:flex;align-items:center;gap:6px">
           <span style="color:var(--dim);font-size:11px" id="fd-arrow-${name}">▶</span>
           <div>
-            <strong style="color:var(--text)">${name}</strong>
+            <div style="display:flex;align-items:center;gap:8px">
+              <strong style="color:var(--text)">${name}</strong>
+              <button onclick="openDeepDive('${name}',event)" title="Open Factor Deep Dive in new tab"
+                style="font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid #3d9eff44;
+                       background:#3d9eff11;color:#3d9eff;cursor:pointer;white-space:nowrap;transition:all .15s"
+                onmouseover="this.style.background='#3d9eff22';this.style.borderColor='#3d9eff88'"
+                onmouseout="this.style.background='#3d9eff11';this.style.borderColor='#3d9eff44'">
+                🔬 Deep Dive
+              </button>
+            </div>
             <div style="font-size:9px;color:var(--dim);margin-top:1px">${nf} factors</div>
             ${tags?`<div style="margin-top:4px;line-height:1.8">${tags}</div>`:''}
           </div>
