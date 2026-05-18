@@ -249,6 +249,247 @@ class InsiderAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: Congressional Trading Signal ────────────────────────────
+        try:
+            import requests as _req_cong
+            _cong_url = "https://house-stock-watcher-data.s3-us-gov-west-1.amazonaws.com/data/all_transactions.json"
+            _cong_resp = _req_cong.get(_cong_url, timeout=8)
+            if _cong_resp.ok:
+                import datetime as _dt_cong
+                _cong_trades = _cong_resp.json()
+                _today_cong  = _dt_cong.date.today()
+                _ticker_up   = ticker.upper()
+                _recent_trades = [
+                    t for t in _cong_trades
+                    if t.get("ticker", "").upper() == _ticker_up
+                    and ((_today_cong - _dt_cong.date.fromisoformat(
+                        t.get("transaction_date", "2000-01-01")[:10]
+                    )).days <= 180)
+                ]
+                if _recent_trades:
+                    _buy_c  = sum(1 for t in _recent_trades if "purchase" in t.get("type", "").lower())
+                    _sell_c = sum(1 for t in _recent_trades if "sale" in t.get("type", "").lower())
+                    _net_c  = _buy_c - _sell_c
+                    _cong_score = (75.0 if _net_c > 0 else 45.0 if _net_c == 0 else 25.0)
+                    factor_scores["congressional_trading"] = FactorScore(
+                        name="Congressional Trading Signal",
+                        value=float(_net_c),
+                        score=_cong_score,
+                        interpretation=f"Congress trades (180d): {_buy_c} buys, {_sell_c} sells → net {_net_c:+d} ({'insider buying signal' if _net_c > 0 else 'net selling — caution' if _net_c < 0 else 'neutral activity'})",
+                    )
+                    if _buy_c > 2:
+                        edgar_reasoning.append(f"Congressional buying: {_buy_c} members purchased {ticker} recently.")
+        except Exception:
+            pass
+
+        # ── New: 13F Institutional Ownership Change (QoQ) ────────────────
+        try:
+            import yfinance as _yf_13f
+            _inst_h = _yf_13f.Ticker(ticker).institutional_holders
+            if _inst_h is not None and not _inst_h.empty and "% Out" in _inst_h.columns:
+                if "Date Reported" in _inst_h.columns:
+                    _inst_dates = _inst_h["Date Reported"].dropna().unique()
+                    if len(_inst_dates) >= 2:
+                        _d_recent = sorted(_inst_dates)[-1]
+                        _d_prior  = sorted(_inst_dates)[-2]
+                        _pct_now  = float(_inst_h[_inst_h["Date Reported"] == _d_recent]["% Out"].sum()) * 100
+                        _pct_prev = float(_inst_h[_inst_h["Date Reported"] == _d_prior]["% Out"].sum()) * 100
+                        _13f_delta = _pct_now - _pct_prev
+                        _13f_score = (75.0 if _13f_delta > 2 else 55.0 if _13f_delta > 0 else 40.0 if _13f_delta > -2 else 20.0)
+                        factor_scores["inst_13f_delta"] = FactorScore(
+                            name="13F Institutional Change (QoQ)",
+                            value=round(_13f_delta, 2),
+                            score=_13f_score,
+                            interpretation=f"Institutional holdings: {_pct_now:.1f}% vs {_pct_prev:.1f}% prior → Δ{_13f_delta:+.1f}pp ({'accumulation' if _13f_delta > 1 else 'distribution' if _13f_delta < -1 else 'stable'})",
+                        )
+                    else:
+                        _inst_pct_single = float(_inst_h["% Out"].sum()) * 100
+                        factor_scores["inst_13f_delta"] = FactorScore(
+                            name="13F Institutional Ownership",
+                            value=round(_inst_pct_single, 2),
+                            score=(70.0 if _inst_pct_single > 70 else 55.0 if _inst_pct_single > 50 else 40.0),
+                            interpretation=f"Institutional ownership: {_inst_pct_single:.1f}% ({'high conviction' if _inst_pct_single > 70 else 'moderate' if _inst_pct_single > 50 else 'low institutional interest'})",
+                        )
+        except Exception:
+            pass
+
+        # ── New: FINRA Short Sale Volume (Dark Pool Proxy) ────────────────
+        try:
+            import requests as _req_dp
+            import datetime as _dt_dp
+            _today_dp = _dt_dp.date.today()
+            _days_to_fri = (_today_dp.weekday() - 4) % 7 or 7
+            _last_fri_dp = _today_dp - _dt_dp.timedelta(days=_days_to_fri)
+            _dp_found = False
+            for _wk in range(4):
+                _fri_dt = _last_fri_dp - _dt_dp.timedelta(weeks=_wk)
+                _dp_url = f"https://cdn.finra.org/equity/regsho/weekly/CNMSweekly{_fri_dt.strftime('%Y%m%d')}.txt"
+                try:
+                    _dp_resp = _req_dp.get(_dp_url, timeout=8)
+                    if _dp_resp.ok and len(_dp_resp.text) > 200:
+                        for _dp_line in _dp_resp.text.strip().split("\n")[1:]:
+                            _dp_cols = _dp_line.split("|")
+                            if len(_dp_cols) >= 4 and _dp_cols[0].upper() == ticker.upper():
+                                _short_v = float(_dp_cols[1])
+                                _total_v = float(_dp_cols[3])
+                                if _total_v > 0:
+                                    _short_pct = _short_v / _total_v * 100
+                                    _dp_score = (70.0 if _short_pct < 45 else 50.0 if _short_pct < 55 else 25.0)
+                                    factor_scores["finra_short_volume"] = FactorScore(
+                                        name="FINRA Short Sale Volume %",
+                                        value=round(_short_pct, 1),
+                                        score=_dp_score,
+                                        interpretation=f"RegSHO: short vol {_short_pct:.1f}% of weekly total — {'bearish institutional pressure' if _short_pct > 55 else 'low short activity' if _short_pct < 45 else 'normal range'}",
+                                    )
+                                    if _short_pct > 60:
+                                        edgar_reasoning.append(f"FINRA short volume elevated: {_short_pct:.1f}% — institutional bearish pressure.")
+                                    _dp_found = True
+                                break
+                        if _dp_found:
+                            break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # ── New: ETF Flow Impact (Sector ETF Volume-Price Proxy) ─────────
+        try:
+            import yfinance as _yf_ef
+            import numpy as _np_ef
+            _sector_etf_map_ef = {
+                "Technology": "XLK", "Communication Services": "XLC",
+                "Consumer Discretionary": "XLY", "Consumer Staples": "XLP",
+                "Health Care": "XLV", "Industrials": "XLI", "Materials": "XLB",
+                "Energy": "XLE", "Financials": "XLF", "Real Estate": "XLRE", "Utilities": "XLU",
+            }
+            _tkr_info_ef = _yf_ef.Ticker(ticker).info
+            _sector_ef = _tkr_info_ef.get("sector", "") if isinstance(_tkr_info_ef, dict) else ""
+            _sec_etf_ef = _sector_etf_map_ef.get(_sector_ef)
+            if _sec_etf_ef:
+                _etf_hist = _yf_ef.download(_sec_etf_ef, period="3mo", interval="1d",
+                                            auto_adjust=True, progress=False)
+                if not _etf_hist.empty and len(_etf_hist) >= 22:
+                    _etf_close = _etf_hist["Close"].squeeze().dropna()
+                    _etf_vol   = _etf_hist["Volume"].squeeze().dropna()
+                    _vol_now   = float(_etf_vol.iloc[-5:].mean())
+                    _vol_hist  = float(_etf_vol.iloc[-22:-5].mean())
+                    _vol_ratio = _vol_now / _vol_hist if _vol_hist > 0 else 1.0
+                    _price_mom = float(_etf_close.iloc[-1] / _etf_close.iloc[-22] - 1) * 100
+                    _flow_signal = _price_mom * float(_np_ef.log1p(_vol_ratio))
+                    _ef_score = max(10.0, min(90.0, 50.0 + _flow_signal * 1.5))
+                    factor_scores["etf_flow_impact"] = FactorScore(
+                        name=f"ETF Flow Impact ({_sec_etf_ef})",
+                        value=round(_flow_signal, 2),
+                        score=_ef_score,
+                        interpretation=f"{_sec_etf_ef} flow proxy: {_price_mom:+.1f}% × vol ratio {_vol_ratio:.2f} → {_flow_signal:+.1f} — {'sector inflow (bullish)' if _flow_signal > 3 else 'sector outflow (bearish)' if _flow_signal < -3 else 'neutral flow'}",
+                    )
+        except Exception:
+            pass
+
+        # ── New: Activist 13D/G Filing (EDGAR EFTS) ──────────────────────
+        try:
+            import requests as _req_act
+            import datetime as _dt_act
+            _act_start = (_dt_act.date.today() - _dt_act.timedelta(days=90)).isoformat()
+            _act_url = (
+                f"https://efts.sec.gov/LATEST/search-index?"
+                f"q=%22{ticker}%22&forms=SC+13D,SC+13G"
+                f"&dateRange=custom&startdt={_act_start}"
+            )
+            _act_resp = _req_act.get(
+                _act_url, timeout=5,
+                headers={"User-Agent": "AlphaAgent alphaagent@research.example.com"}
+            )
+            if _act_resp.ok:
+                _act_data = _act_resp.json()
+                _act_hits = _act_data.get("hits", {}).get("total", {})
+                _act_count = _act_hits.get("value", 0) if isinstance(_act_hits, dict) else int(_act_hits)
+                _act_score = (80.0 if _act_count > 0 else 50.0)
+                factor_scores["activist_13d"] = FactorScore(
+                    name="Activist 13D/G Filing",
+                    value=float(_act_count),
+                    score=_act_score,
+                    interpretation=f"SC 13D/G filings (90d): {_act_count} — {'ACTIVIST INVESTOR — takeover/change catalyst' if _act_count > 0 else 'no activist filing'}",
+                )
+                if _act_count > 0:
+                    warnings.append(f"ACTIVIST SIGNAL: {_act_count} SC 13D/G filing(s) in 90 days — activist investor pressure.")
+                    edgar_reasoning.append(f"Activist 13D/G detected — hedge fund may be pushing for strategic change.")
+        except Exception:
+            pass
+
+        # ── New: Top-10 Holder Concentration (Herfindahl Index) ──────────
+        try:
+            import yfinance as _yf_hhi
+            import numpy as _np_hhi
+            _inst_hhi = _yf_hhi.Ticker(ticker).institutional_holders
+            if _inst_hhi is not None and not _inst_hhi.empty and "% Out" in _inst_hhi.columns:
+                _pcts_raw = _inst_hhi["% Out"].dropna().values[:10]
+                _pcts = _np_hhi.array([
+                    float(p) if float(p) < 1.0 else float(p) / 100.0
+                    for p in _pcts_raw
+                ], dtype=float)
+                if len(_pcts) > 0 and _pcts.sum() > 0:
+                    _hhi_raw = float(_np_hhi.sum(_pcts ** 2))
+                    _hhi_score = (60.0 if 0.05 < _hhi_raw < 0.25 else 40.0 if _hhi_raw > 0.25 else 55.0)
+                    factor_scores["top10_concentration"] = FactorScore(
+                        name="Top-10 Holder Concentration (HHI)",
+                        value=round(_hhi_raw, 4),
+                        score=_hhi_score,
+                        interpretation=f"Herfindahl Index: {_hhi_raw:.4f} — {'high concentration — activist/block risk' if _hhi_raw > 0.25 else 'dispersed base — stable ownership' if _hhi_raw < 0.05 else 'moderate concentration'}",
+                    )
+        except Exception:
+            pass
+
+        # ── New: Dark Pool Print Ratio (FINRA ADF Volume) ───────────────
+        try:
+            import urllib.request as _req_dp
+            import json as _json_dp
+            _dp_url = f"https://regsho.finra.org/regsho-Index.html"
+            _dp_found = False
+            _dp_url2 = f"https://api.finra.org/data/group/otcmarket/name/weeklySummary?limit=5&offset=0&compareFilters=issueSymbolIdentifier%3Aeq%3A{ticker.upper()}"
+            try:
+                _req_dp2 = _req_dp.Request(_dp_url2, headers={"User-Agent": "AlphaAgent/1.0", "Accept": "application/json"})
+                with _req_dp.urlopen(_req_dp2, timeout=4) as _resp_dp:
+                    _data_dp = _json_dp.loads(_resp_dp.read().decode())
+                if _data_dp and isinstance(_data_dp, list) and len(_data_dp) > 0:
+                    _row_dp = _data_dp[0]
+                    _adf_vol = float(_row_dp.get("totalWeeklyShareQuantity", 0) or 0)
+                    _tot_vol = float(_row_dp.get("totalReportedWeeklyShareQuantity", 0) or _adf_vol)
+                    if _tot_vol > 0 and _adf_vol > 0:
+                        _dp_ratio = _adf_vol / _tot_vol * 100
+                        _dp_score = (72.0 if _dp_ratio > 50 else 55.0 if _dp_ratio > 35 else 45.0)
+                        factor_scores["dark_pool_ratio"] = FactorScore(
+                            name="Dark Pool Print Ratio (FINRA ADF)",
+                            value=round(_dp_ratio, 1),
+                            score=_dp_score,
+                            interpretation=(
+                                f"ADF/OTC vol: {_dp_ratio:.1f}% of reported weekly volume — "
+                                f"{'high dark pool activity (institutional accumulation likely)' if _dp_ratio > 50 else 'moderate off-exchange activity' if _dp_ratio > 35 else 'low dark pool presence'}"
+                            ),
+                        )
+                        if _dp_ratio > 55:
+                            edgar_reasoning.append(f"High dark pool volume ({_dp_ratio:.0f}%) — institutional off-exchange activity elevated.")
+                        _dp_found = True
+            except Exception:
+                pass
+            if not _dp_found:
+                import yfinance as _yf_dp
+                _hist_dp = _yf_dp.download(ticker, period="5d", interval="1d", auto_adjust=True, progress=False)
+                if not _hist_dp.empty and "Volume" in _hist_dp.columns:
+                    _vol_5d = float(_hist_dp["Volume"].squeeze().dropna().mean())
+                    _vol_hist_dp = _yf_dp.download(ticker, period="3mo", interval="1d", auto_adjust=True, progress=False)
+                    _vol_avg_dp = float(_vol_hist_dp["Volume"].squeeze().dropna().mean()) if not _vol_hist_dp.empty else _vol_5d
+                    _vol_ratio_dp = _vol_5d / _vol_avg_dp if _vol_avg_dp > 0 else 1.0
+                    _dp_proxy = min(90.0, max(10.0, 40.0 + (_vol_ratio_dp - 1.0) * 20.0))
+                    factor_scores["dark_pool_ratio"] = FactorScore(
+                        name="Dark Pool Proxy (Volume vs Avg)",
+                        value=round(_vol_ratio_dp, 2),
+                        score=_dp_proxy,
+                        interpretation=f"5d avg vol vs 3M avg: {_vol_ratio_dp:.2f}x — {'elevated institutional activity' if _vol_ratio_dp > 1.5 else 'normal volume' if _vol_ratio_dp > 0.7 else 'below-avg volume'} (FINRA ADF unavailable)",
+                    )
+        except Exception:
+            pass
+
         # ── 3. Composite Probability ──────────────────────────────────────
         all_scores = [fs.score for fs in factor_scores.values()]
         composite_score = sum(all_scores) / len(all_scores) if all_scores else 50.0
@@ -258,8 +499,14 @@ class InsiderAgent(BaseAgent):
         confidence = 0.5
         if result.institutional_ownership_pct > 80:
             confidence += 0.2
-        if abs(result.net_insider_shares) > 50000:
-            confidence += 0.2
+        try:
+            _price = data.get_current_price()
+            _insider_dollar_value = abs(result.net_insider_shares) * (_price or 1.0)
+            if _insider_dollar_value > 1_000_000:
+                confidence += 0.2
+        except Exception:
+            if abs(result.net_insider_shares) > 50000:
+                confidence += 0.2
         confidence = min(1.0, max(0.0, confidence))
 
         # ── 5. Reasoning ──────────────────────────────────────────────────

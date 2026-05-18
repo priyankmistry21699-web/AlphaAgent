@@ -36,37 +36,41 @@ class KellyCriterion:
         else:
             self.win_loss_ratio = expected_win_pct / expected_loss_pct
             
-    def calculate(self, current_volatility: float = 0.0) -> KellyResult:
+    # Caps adapt to GARCH vol regime — tighter in high-vol to prevent ruin
+    _CAPS = {
+        "LOW":     (0.20, 0.10, 0.10),
+        "NORMAL":  (0.15, 0.08, 0.08),
+        "HIGH":    (0.10, 0.05, 0.05),
+        "EXTREME": (0.05, 0.03, 0.03),
+    }
+
+    def calculate(self, current_volatility: float = 0.0,
+                  vol_regime: str = "NORMAL") -> KellyResult:
         """
         Calculates the exact percentage of the portfolio to risk.
-        
+
         Args:
-            current_volatility: Optional volatility metric to further reduce the size.
+            current_volatility: Daily vol metric (fraction, e.g. 0.02 = 2%).
+            vol_regime: GARCH regime string — LOW / NORMAL / HIGH / EXTREME.
         """
-        # Full Kelly Formula: K = W - ((1 - W) / R)
-        # where W is prob_win and R is win_loss_ratio
-        
         full_k = self.prob_win - (self.prob_loss / self.win_loss_ratio)
-        
-        # If Full Kelly is negative, we shouldn't take the trade (expectation is negative)
         full_k = max(0.0, full_k)
-        
-        # Institutional standard: Half-Kelly (less drawdown, safer compounding)
+
         half_k = full_k / 2.0
-        
-        # Volatility adjusted
-        # If market is extremely volatile (e.g., VIX > 30), reduce size further
+
         vol_adjusted_k = half_k
-        if current_volatility > 0.03: # >3% daily vol is very high
+        if current_volatility > 0.03:
             vol_adjusted_k *= (0.03 / current_volatility)
-            
-        # Hard cap at 30% of portfolio to prevent catastrophic ruin on black swans
-        full_k = min(0.30, full_k)
-        half_k = min(0.15, half_k)
-        vol_adjusted_k = min(0.15, vol_adjusted_k)
-        
+
+        cap_full, cap_half, cap_vol = self._CAPS.get(
+            vol_regime.upper(), self._CAPS["NORMAL"]
+        )
+        full_k         = min(cap_full, full_k)
+        half_k         = min(cap_half, half_k)
+        vol_adjusted_k = min(cap_vol,  vol_adjusted_k)
+
         return KellyResult(
             full_kelly=full_k,
             half_kelly=half_k,
-            vol_adjusted_kelly=vol_adjusted_k
+            vol_adjusted_kelly=vol_adjusted_k,
         )

@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Phase-6%20Complete-22c55e?style=for-the-badge&logo=checkmarx&logoColor=white"/>
+<img src="https://img.shields.io/badge/Phase-7%20Complete-22c55e?style=for-the-badge&logo=checkmarx&logoColor=white"/>
 <img src="https://img.shields.io/badge/Agents-9%20Specialist-3b82f6?style=for-the-badge&logo=probot&logoColor=white"/>
-<img src="https://img.shields.io/badge/Factors-163%20Signals-8b5cf6?style=for-the-badge&logo=chartdotjs&logoColor=white"/>
+<img src="https://img.shields.io/badge/Factors-226%2B%20Signals-8b5cf6?style=for-the-badge&logo=chartdotjs&logoColor=white"/>
 <img src="https://img.shields.io/badge/LLM-Gemini%202.0%20Flash-f59e0b?style=for-the-badge&logo=google&logoColor=white"/>
 <img src="https://img.shields.io/badge/Framework-LangGraph-ef4444?style=for-the-badge&logo=langchain&logoColor=white"/>
 <img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white"/>
@@ -20,7 +20,7 @@
 
 **Production-Grade · Multi-Agent · Quantitative Trading Intelligence**
 
-*9 specialist agents — 163 factors — 11 quant engine modules — real-time LLM reasoning — dynamic horizon weighting*
+*9 specialist agents — 226+ factors — 19 quant engine modules — real-time LLM reasoning — dynamic horizon weighting*
 
 <br/>
 
@@ -94,63 +94,67 @@ flowchart TB
 
     USER --> ORCH
 
-    subgraph TIER["🤖  AGENT TIER  ───  163 Factors Total"]
+    subgraph TIER["🤖  AGENT TIER  ───  226+ Factors Total"]
         direction LR
         TECH["🔵  TECHNICAL
-        30 factors
+        27 factors
         RSI · MACD · BB · ADX
         EMA 9/21 · TDA Homology
-        IV Skew · GEX · Max Pain
-        Variance Risk Premium"]:::techNode
+        Ichimoku · CMF · TRIX
+        SAR · Supply/Demand Zones"]:::techNode
 
         FUND["🟢  FUNDAMENTAL
-        28 factors
+        22 factors
         DCF · P/E · P/B · PEG
         Fama-French 5-Factor
-        CAPM Alpha · Accruals
-        Altman Z · Div Growth"]:::fundNode
+        CAPM Alpha · Altman Z
+        Net Debt/EBITDA · Div Yield"]:::fundNode
 
         MACRO["🟡  MACRO
-        26 factors
+        25 factors
         CPI · Yield Curve · M2
         Fed Funds · SOFR Spread
-        WALCL · ISM PMI · BTC
-        Amihud · Bond-Equity ρ"]:::macroNode
+        WALCL · ISM PMI
+        Retail Sales · LEI
+        HY OAS · ERP · NFCI"]:::macroNode
 
         SENT["🟠  SENTIMENT
-        14 factors
+        19 factors
         News RAG · Gemini LLM
-        Short Interest · F&G
-        Transfer Entropy
-        AAII · Price Target"]:::sentNode
+        FinBERT NLP · Reddit
+        Short-Squeeze Score
+        Transfer Entropy · AAII"]:::sentNode
 
         INS["🔴  INSIDER
-        11 factors
+        13 factors
         EDGAR Form 4
         Kyle's Lambda
         Cluster Buy · Float Δ
-        Short Squeeze · 13F"]:::insNode
+        Dark Pool · Activist 13D"]:::insNode
 
         RISK["🟣  RISK
-        16 factors
+        15 factors
         GARCH · EVT/GPD
         Monte Carlo GBM
         Hawkes · Quasi-MC
-        KL Divergence · Kelly"]:::riskNode
+        Skew/Kurt · GEX
+        Pairs Z-score · Kelly"]:::riskNode
 
         GEO["🌍  GEOPOLITICAL
-        19 factors
+        8 factors
         Caldara GPR (FRED)
-        Oil Brent · ITA RS
-        Election Cycle
-        Dow Theory · PDBC"]:::geoNode
+        Active Conflict NLP
+        Sanctions · Tariff NLP
+        Currency Stress
+        Commodity Disruption"]:::geoNode
 
         VOL["📊  VOLATILITY
-        9 factors
-        GARCH Regime
-        Put/Call Ratio
-        IV vs Realized
-        VVIX · SKEW · VIX TS"]:::volNode
+        12 factors
+        GARCH Regime · EGARCH
+        Heston Stochastic Vol
+        SABR · Rough Vol
+        Multifractal MF-DFA
+        Put/Call · VVIX · SKEW"]:::volNode
 
         CUR["💱  CURRENCY
         11 factors
@@ -281,19 +285,43 @@ flowchart LR
         Isotonic Regression
         Probability Scoring
         Rolling Window"]:::quantNode
+
+        G10["Heston Stochastic Vol
+        dσ² = κ(θ−σ²)dt + ξσdW
+        Smile fit + IV surface"]:::quantNode
+
+        G11["SABR Model
+        σ_SABR(K,T,α,β,ρ,ν)
+        Sticky strike smile"]:::quantNode
+
+        G12["Rough Volatility (rBergomi)
+        Hurst exponent H
+        Fractional Brownian Vol"]:::quantNode
+
+        G13["Copula Dependency
+        Gaussian · Clayton · Gumbel
+        Tail co-dependence"]:::quantNode
+
+        G14["Granger Causality
+        F-test VAR(p)
+        News → Price lag"]:::quantNode
+
+        G15["Multifractal MF-DFA
+        q-order fluctuation fn
+        Scaling exponent h(q)"]:::quantNode
     end
 
-    subgraph AG["🤖  AGENT LAYER  ·  163 Factors"]
+    subgraph AG["🤖  AGENT LAYER  ·  226+ Factors"]
         direction TB
-        A1["🔵  Technical   30f"]:::agntNode
-        A2["🟢  Fundamental 28f"]:::agntNode
-        A3["🟡  Macro       26f"]:::agntNode
-        A4["🟠  Sentiment   14f"]:::agntNode
-        A5["🔴  Insider     11f"]:::agntNode
-        A6["🟣  Risk        16f"]:::agntNode
-        A7["🌍  Geopolitical 19f"]:::agntNode
-        A8["📊  Volatility   9f"]:::agntNode
-        A9["💱  Currency    11f"]:::agntNode
+        A1["🔵  Technical    27f"]:::agntNode
+        A2["🟢  Fundamental  22f"]:::agntNode
+        A3["🟡  Macro        25f"]:::agntNode
+        A4["🟠  Sentiment    19f"]:::agntNode
+        A5["🔴  Insider      13f"]:::agntNode
+        A6["🟣  Risk         15f"]:::agntNode
+        A7["🌍  Geopolitical  8f"]:::agntNode
+        A8["📊  Volatility   12f"]:::agntNode
+        A9["💱  Currency     11f"]:::agntNode
     end
 
     subgraph OR["⚡  ORCHESTRATION"]
@@ -322,22 +350,27 @@ flowchart LR
         Paper Trading State"]:::apiNode
     end
 
-    subgraph FE["🖥️  FRONTEND"]
+    subgraph FE["🖥️  FRONTEND  (React + Legacy)"]
         direction TB
-        DH["Single-File Dashboard
-        index.html  ~1800 lines
-        HTML · CSS · JS
-        Zero build step"]:::uiNode
+        RX["React 18 + Vite
+        frontend-react/
+        Component-based SPA
+        Hot-reload dev mode"]:::uiNode
 
-        TB["9 Interactive Tabs
-        Signal · Portfolio
-        Backtest · Quant Lab
-        Optimizer · Leaderboard"]:::uiNode
+        TB["10 Tabs + AI Chatbot
+        Signal · Portfolio · Backtest
+        Quant Panel · AI Assistant
+        QuantPanel 226+ factors"]:::uiNode
 
-        LC["Lightweight Charts
-        TradingView Library
+        LC["TradingView Charts
+        PriceChart · VolumeCard
         1D 5D 1M 3M 6M 1Y
         5m · 1h · 1d bars"]:::uiNode
+
+        LG2["Legacy Dashboard
+        frontend/index.html
+        Fallback when React not built
+        /legacy route"]:::uiNode
     end
 
     DS --> QE
@@ -354,14 +387,14 @@ flowchart LR
 
 | # | Agent | 🎨 | Factors | Key Theories & Signals |
 |---|-------|:--:|:-------:|---|
-| 1 | **Technical** | 🔵 | 30 | RSI · MACD · BB · ADX · EMA 9/21 · TDA Persistent Homology · IV Skew (25Δ) · GEX · Max Pain · Variance Risk Premium · PCA Quality |
-| 2 | **Fundamental** | 🟢 | 28 | DCF · P/E · P/B · PEG · Fama-French 5-Factor · CAPM Jensen's Alpha · Altman Z-Score · Accruals Ratio · Dividend Growth Rate · Buyback Signal |
-| 3 | **Macro** | 🟡 | 26 | 10Y-2Y Yield Curve · CPI · Fed Funds · SOFR Spread · WALCL (Fed Balance Sheet) · ISM PMI · Amihud Illiquidity · Bond-Equity Correlation · GPR Index |
-| 4 | **Sentiment** | 🟠 | 14 | News RAG (Gemini 2.0 Flash) · Short Interest · Fear & Greed · Analyst Consensus · Transfer Entropy · Shannon Entropy · AAII Contrarian · Price Target Upside |
-| 5 | **Insider** | 🔴 | 11 | EDGAR Form 4 · Kyle's Lambda · Float Reduction · Insider Cluster 30-Day · Short Squeeze · 13F Institutional Ownership · Material Events (8-K) |
-| 6 | **Risk** | 🟣 | 16 | GARCH(1,1) · EVT/GPD · Monte Carlo GBM · Kelly Criterion · Hawkes Process · Quasi-MC Sobol · KL Divergence · Tail Ratio · Drawdown from ATH |
-| 7 | **Geopolitical** | 🌍 | 19 | Caldara-Iacoviello GPR (FRED) · Oil Brent · Gold Safe-Haven · ITA Defense RS · Election Cycle · Dow Theory Transport · Copper/Gold Ratio · Credit Stress |
-| 8 | **Volatility** | 📊 | 9 | GARCH Regime · Put/Call Ratio · IV vs Realized (VRP) · Kalman Dynamic Beta · VIX Term Structure · CBOE SKEW · VVIX · Realized Vol Trend |
+| 1 | **Technical** | 🔵 | 27 | RSI · MACD · BB · ADX · EMA 9/21 · TDA Persistent Homology · Ichimoku Cloud · Chaikin MF (CMF-14) · TRIX · Parabolic SAR · Supply/Demand Zones · Volume Profile POC · Chart Patterns · Fibonacci · Pivot Points · OFI · Cross-Sectional Rank |
+| 2 | **Fundamental** | 🟢 | 22 | DCF · P/E · P/B · PEG · Fama-French 5-Factor · CAPM Jensen's Alpha · Altman Z · Beneish M · Graham Number · Net Debt/EBITDA · Dividend Yield+Payout · Earnings Call NLP (Gemini) · Earnings Revision Momentum |
+| 3 | **Macro** | 🟡 | 25 | 10Y-2Y Yield Curve · CPI · PCE · Fed Funds · SOFR Spread · WALCL · ISM PMI · Retail Sales (RSXFS) · LEI (USSLIND) · HY OAS (BAMLH0A0HYM2) · ERP · NFCI · Amihud · Bond-Equity ρ · Real Rate (Fisher) |
+| 4 | **Sentiment** | 🟠 | 19 | News RAG (Gemini 2.0 Flash) · FinBERT-Style NLP · Reddit Sentiment · News Decay Model · Short-Squeeze Score · Unusual Options Activity · Short Interest · Fear & Greed · Transfer Entropy · Shannon Entropy · AAII · Source Credibility |
+| 5 | **Insider** | 🔴 | 13 | EDGAR Form 4 · Kyle's Lambda · Float Reduction · Insider Cluster · FINRA Short Vol (RegSHO) · ETF Flow Impact · Activist 13D/SC 13G · Top-10 Holder HHI · Dark Pool Print Ratio (FINRA ADF) |
+| 6 | **Risk** | 🟣 | 15 | GARCH(1,1) · EVT/GPD · Monte Carlo GBM · Kelly Criterion · Hawkes Process · Quasi-MC Sobol · KL Divergence · Rolling Sharpe/Sortino (63d) · Vanna/Charm · Skewness/Kurtosis · Options GEX Wall · Pairs Z-score |
+| 7 | **Geopolitical** | 🌍 | 8 | Caldara-Iacoviello GPR (FRED) · VIX Event Spike · Active Conflict NLP · Sanctions NLP · Tariff/Regulatory NLP · Currency Stress Index · Commodity Disruption · Central Bank Surprise |
+| 8 | **Volatility** | 📊 | 12 | GARCH Regime · EGARCH · Heston Stochastic Vol · SABR Smile Fit · Rough Vol (rBergomi Hurst H) · Hawkes Self-Exciting · Multifractal MF-DFA · Put/Call Ratio · IV vs Realized (VRP) · VIX Term Structure · VVIX · CBOE SKEW |
 | 9 | **Currency** | 💱 | 11 | DXY Regime · EUR/USD · USD/JPY Carry Trade · USD/CNY Stress · EM FX Basket · Real Interest Rate · Petro-Currency (CAD/AUD) · Carry Attractiveness |
 
 ---
@@ -381,6 +414,15 @@ flowchart LR
 | `hawkes.py` | **Hawkes Self-Exciting Process** | λ(t) = μ + α·Σexp(−β(t−tᵢ)) → branching ratio α/β → cascade risk classification |
 | `calibration.py` | **Platt Scaling** | Isotonic regression on rolling signal history → calibrated probability output |
 | `technical.py` | **Classical Indicators** | RSI · MACD · Bollinger Bands · ADX · ATR · Stochastic (all windows configurable in settings.yaml) |
+| `heston.py` | **Heston Stochastic Vol** | dv = κ(θ−v)dt + ξ√v·dW₂; closed-form call price → IV surface fit + smile |
+| `sabr.py` | **SABR Model** | σ_SABR(K,F,α,β,ρ,ν) Hagan formula → sticky-strike vol smile calibration |
+| `rough_vol.py` | **Rough Volatility (rBergomi)** | σ_t = ξ₀·exp(η·W^H_t); H<0.5 (rough) → realized vol clustering |
+| `copula.py` | **Copula Dependency** | Gaussian, Clayton, Gumbel copulas → tail co-dependence λ_L for portfolio correlation |
+| `granger.py` | **Granger Causality** | F-test on VAR(p): does news time series Granger-cause price returns? |
+| `causal_engine.py` | **Do-Calculus DAG** | Directed acyclic graph causal inference → macro regime → factor attribution |
+| `multifractal.py` | **Multifractal MF-DFA** | q-order fluctuation functions → generalized Hurst h(q) → scaling spectrum |
+| `lob.py` | **Limit Order Book (proxy)** | Bid-ask spread proxy via OHLCV → effective spread + market impact model |
+| `quantum_finance.py` | **Quantum-Inspired Finance** | Amplitude estimation for option pricing + QAOA portfolio optimization (research) |
 
 ---
 
@@ -423,13 +465,14 @@ Six-tier **priority override cascade** — first triggered override halts furthe
 
 | Tab | Icon | Purpose |
 |-----|:----:|---------|
-| **Signal Analysis** | 🔵 | 9-agent deep research · 1D/1W/1M/3M/6M/1Y horizon selector · Top-50 quick-launch chips · smart autocomplete · live TradingView chart (5m/1h/1d bars) |
+| **Signal Analysis** | 🔵 | 9-agent deep research · 1D/1W/1M/3M/6M/1Y · Top-50 chips · TradingView chart · AI Assistant chat |
 | **Live Portfolio** | 🟢 | Real-time positions · unrealized P&L · portfolio composition chart · add/close positions |
 | **Paper Trading** | 🟡 | Simulated order execution at live prices · trade log · running P&L — no real money |
 | **Backtest** | 🟠 | Historical simulation · equity curve · Sharpe · Sortino · max drawdown · win rate |
 | **Walk-Forward** | 🔴 | Rolling out-of-sample validation — the real test of whether signals generalize |
 | **Stress Test** | 🟣 | 2008 Crash · COVID-19 · 1987 Black Monday · Taper Tantrum · Rate Shock · Oil Shock · Tech Bubble |
 | **Quant Lab** | 🔵 | Interactive GARCH forecast · Monte Carlo path plot · EVT tail risk · Quasi-MC Sobol |
+| **Quant Panel** | 🔬 | 226+ factors across all agents · 34+ quant theories · interactive factor drill-down |
 | **Leaderboard** | 🟢 | Agent accuracy ranking · confidence calibration · recent call history |
 | **Optimizer** | 🟡 | Mean-variance portfolio optimization · efficient frontier visualization |
 
@@ -476,7 +519,8 @@ GET /api/v1/signal/{ticker}?horizon=1m
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/` | Dashboard (serves `frontend/index.html`) |
+| `GET` | `/` | Dashboard (React SPA or legacy fallback) |
+| `GET` | `/legacy` | Legacy single-file dashboard (frontend/index.html) |
 | `GET` | `/api/v1/signal/{ticker}?horizon=` | Full 9-agent signal analysis |
 | `GET` | `/api/v1/portfolio` | Live portfolio positions |
 | `POST` | `/api/v1/paper/signal/{ticker}` | Signal + execute paper trade |
@@ -504,6 +548,8 @@ GET /api/v1/signal/{ticker}?horizon=1m
 | `SEC EDGAR` | 🔴 Insider | Form 4 insider filings · 13F institutional · 8-K material events | Free |
 | `House Stock Watcher` | 🟢 Congress | Congressional trading disclosures (House) — STOCK Act filings | Free |
 | `Senate Stock Watcher` | 🟢 Congress | Congressional trading disclosures (Senate) — STOCK Act filings | Free |
+| `Reddit Public API` | 🟠 Sentiment | r/wallstreetbets · r/stocks · r/investing post scanning — public JSON endpoint | Free |
+| `FINRA ADF/RegSHO` | 🔴 Insider | Weekly off-exchange (dark pool) volume · RegSHO short sale data | Free |
 | `Gemini 2.0 Flash` | 🟣 LLM | RAG sentiment scoring (SCORE 0–100) · signal chat assistant | Free tier |
 | `ChromaDB` | 🔵 Vector | Semantic similarity search over news headlines for RAG pipeline | Free / local |
 
@@ -550,29 +596,38 @@ uvicorn api.main:app --reload --host 0.0.0.0 --port 8088
 ```
 AlphaAgent/
 │
-├── 🤖 agents/                     # 9 specialist agents
-│   ├── technical.py               # 30 factors — RSI, MACD, TDA, GEX, IV Skew, VRP
-│   ├── fundamental.py             # 28 factors — DCF, FF5, CAPM, Accruals, Altman Z
-│   ├── macro.py                   # 26 factors — Yield curve, CPI, SOFR, WALCL, GPR
-│   ├── sentiment.py               # 14 factors — News RAG, Transfer Entropy, AAII
-│   ├── insider.py                 # 11 factors — EDGAR Form 4, Kyle's λ, Cluster Buy
-│   ├── risk.py                    # 16 factors — GARCH, EVT, Hawkes, Quasi-MC, KL Div
-│   ├── geopolitical.py            # 19 factors — Caldara GPR, Oil, Election, Dow Theory
-│   ├── volatility.py              #  9 factors — GARCH, Put/Call, SKEW, VVIX, VIX TS
+├── 🤖 agents/                     # 9 specialist agents — 226+ factors total
+│   ├── technical.py               # 27 factors — RSI, MACD, TDA, Ichimoku, CMF, TRIX, SAR, S/D Zones
+│   ├── fundamental.py             # 22 factors — DCF, FF5, CAPM, Graham#, Net Debt/EBITDA, Div Yield
+│   ├── macro.py                   # 25 factors — Yield curve, PCE, RSXFS, LEI, HY OAS, ERP, NFCI
+│   ├── sentiment.py               # 19 factors — News RAG, FinBERT NLP, Reddit, Short-Squeeze
+│   ├── insider.py                 # 13 factors — EDGAR Form 4, Kyle's λ, Dark Pool, Activist 13D
+│   ├── risk.py                    # 15 factors — GARCH, EVT, Hawkes, GEX, Skew/Kurt, Pairs Z
+│   ├── geopolitical.py            #  8 factors — Caldara GPR, Conflict/Sanctions/Tariff NLP
+│   ├── volatility.py              # 12 factors — GARCH, Heston, SABR, Rough Vol, MF-DFA
 │   ├── currency.py                # 11 factors — DXY, Carry Trade, EM FX, Real Rate
 │   └── base.py                    # BaseAgent: thresholds, probability clamping, voting
 │
-├── 🧮 quant_engine/               # Mathematical core
-│   ├── garch.py                   # GARCH(1,1)/EGARCH volatility + regime
-│   ├── hmm.py                     # Hidden Markov Model regime detection
-│   ├── monte_carlo.py             # GBM stochastic simulation (5,000 paths)
-│   ├── quasi_mc.py                # Sobol quasi-random VaR (4,096 paths)
+├── 🧮 quant_engine/               # Mathematical core (18 modules)
+│   ├── garch.py                   # GARCH(1,1)/EGARCH vol forecast + LOW/NORM/HIGH/EXTREME regime
+│   ├── hmm.py                     # Hidden Markov Model — Bull/Bear/Crisis Viterbi decoding
+│   ├── monte_carlo.py             # GBM stochastic simulation (paths scale with GARCH regime)
+│   ├── quasi_mc.py                # Sobol quasi-random VaR (4,096 paths — ~10× pseudorandom)
 │   ├── bayesian.py                # Bayesian log-odds correlation-adjusted fusion
-│   ├── evt.py                     # Extreme Value Theory — GPD + GEV
-│   ├── kalman.py                  # Kalman Filter dynamic beta [α, β]
+│   ├── evt.py                     # Extreme Value Theory — GPD + GEV VaR₉₉/CVaR₉₉
+│   ├── kalman.py                  # Kalman Filter dynamic beta [α_t, β_t]
 │   ├── tda_signal.py              # TDA persistent homology H0/H1 barcodes
-│   ├── hawkes.py                  # Hawkes self-exciting process + branching ratio
-│   └── calibration.py            # Platt scaling probability calibration
+│   ├── hawkes.py                  # Hawkes self-exciting process — branching ratio α/β
+│   ├── calibration.py             # Platt scaling + isotonic regression probability calibration
+│   ├── heston.py                  # Heston stochastic vol — closed-form IV surface fit
+│   ├── sabr.py                    # SABR vol smile — Hagan formula sticky-strike calibration
+│   ├── rough_vol.py               # Rough volatility (rBergomi) — H<0.5 fractional Brownian
+│   ├── copula.py                  # Copula dependency — Gaussian/Clayton/Gumbel tail co-dep
+│   ├── granger.py                 # Granger causality F-test VAR(p) — news→price lag
+│   ├── causal_engine.py           # Do-Calculus DAG causal inference — macro attribution
+│   ├── multifractal.py            # Multifractal MF-DFA — generalized Hurst h(q) scaling
+│   ├── lob.py                     # Limit order book proxy — bid-ask spread market impact
+│   └── quantum_finance.py         # Quantum-inspired amplitude estimation (research)
 │
 ├── 🕸️ orchestrator/
 │   └── graph.py                   # LangGraph DAG — parallel execution + Bayesian fusion
@@ -580,11 +635,11 @@ AlphaAgent/
 ├── 📊 backtest/
 │   ├── engine.py                  # Historical backtesting (realistic cost model)
 │   ├── walk_forward.py            # Rolling out-of-sample validation
-│   └── stress_test.py            # 7 scenario stress tests (2008, COVID-19, 1987 ...)
+│   └── stress_test.py             # 7 scenario stress tests (2008, COVID-19, 1987 ...)
 │
 ├── 💹 trading/
 │   ├── paper_trader.py            # Paper trading engine (SQLite-backed)
-│   └── rl_rebalancer.py          # PPO reinforcement learning rebalancer
+│   └── rl_rebalancer.py           # PPO reinforcement learning rebalancer
 │
 ├── 🗄️ database/
 │   └── manager.py                 # SQLite via SQLAlchemy (trades, portfolio, logs)
@@ -592,14 +647,18 @@ AlphaAgent/
 ├── 📡 api/
 │   └── main.py                    # FastAPI — REST endpoints + WebSocket streaming
 │
+├── 🖥️ frontend-react/             # React 18 + Vite SPA (primary UI)
+│   ├── src/components/            # Signal · Market · Portfolio · QuantPanel · AI Assistant
+│   └── src/styles.css             # Dark-theme CSS variables
+│
 ├── 🖥️ frontend/
-│   └── index.html                 # Single-file dashboard — HTML/CSS/JS, no build step
+│   └── index.html                 # Legacy single-file dashboard (fallback + /legacy route)
 │
 ├── ⚙️ config/
-│   └── settings.yaml              # 72 dynamic parameters (all thresholds configurable)
+│   └── settings.yaml              # 240+ dynamic parameters (all thresholds configurable)
 │
 ├── 📚 AlphaAgent_Technical_Reference.html   # 30-chapter technical reference (MathJax)
-├── 📚 AlphaAgent_Technical_Reference.pdf    # Print-ready A4 PDF version
+├── 📚 QUANT_THEORIES_DEEP_DIVE.md           # Tier 1–4 factor implementation tables
 └── .env                           # API keys (not committed — copy from .env.example)
 ```
 
@@ -611,7 +670,7 @@ AlphaAgent/
 |--------|:-----:|-------|
 | Signal latency | **30–60 s** | LLM inference + market data fetch dominate |
 | Parallel agents | **9 simultaneous** | LangGraph concurrent DAG |
-| Factors per signal | **163** | Across all agents combined |
+| Factors per signal | **226+** | Across all agents combined |
 | Monte Carlo paths | **5,000** | GBM with GARCH-driven daily vol |
 | Quasi-MC paths | **4,096** | Sobol (power-of-2 for uniformity guarantee) |
 | GARCH horizon | **5 days** | Forward vol forecast |
@@ -619,6 +678,7 @@ AlphaAgent/
 | Backtest cost model | **5 bps + 2 bps** | Commission + bid-ask slippage |
 | Max single position | **20%** | Kelly-adjusted cap |
 | Walk-forward train | **252 days** | 1 full year of in-sample data |
+| config/settings.yaml | **240+ dynamic parameters** | All thresholds configurable without code changes |
 
 ---
 
@@ -647,6 +707,19 @@ backtest:
 agent_defaults:
   long_threshold: 0.55    # prob_up above → LONG vote
   short_threshold: 0.45   # prob_up below → SHORT vote
+
+risk:
+  black_swan_prob_up: 0.10      # P(up) during black swan halt
+  geo_shock_multiplier: 0.35    # Position size cap during geo shock
+  kl_divergence_threshold: 1.0  # KL > 1.0 = regime break warning
+
+macro:
+  amihud_stress_threshold: 2.0  # Amihud ratio >2x = illiquidity warning
+  sofr_critical_spread: 0.50    # SOFR-FF spread >50bps = repo stress
+
+sentiment:
+  social_score_base: 40.0       # News buzz baseline score
+  social_score_mult: 4.0        # Per-article score increment
 ```
 
 ---
@@ -658,9 +731,9 @@ A complete **technical reference** is included covering every formula, theory, a
 | Document | Format | Content |
 |----------|:------:|---------|
 | `AlphaAgent_Technical_Reference.html` | 🌐 HTML | 30 chapters · MathJax equations · clickable TOC |
-| `AlphaAgent_Technical_Reference.pdf` | 📄 PDF | A4 print layout · page numbers · fully rendered math |
+| `QUANT_THEORIES_DEEP_DIVE.md` | 📄 Markdown | Tier 1–4 factor implementation tables · deep-dive formulas |
 
-**Chapters cover:** Bayesian fusion log-odds derivation · GARCH(1,1) full equations · EVT/GPD tail theory · Kalman state-space model · TDA persistent homology · Hawkes MLE (Ozaki 1979) · Quasi-MC Sobol uniformity · Kelly Criterion · all 9 agent factor breakdowns · settings reference · full API docs
+**Chapters cover:** Bayesian fusion log-odds derivation · GARCH(1,1) full equations · EVT/GPD tail theory · Kalman state-space model · TDA persistent homology · Hawkes MLE (Ozaki 1979) · Quasi-MC Sobol uniformity · Kelly Criterion · Heston stochastic vol · SABR smile calibration · Rough volatility rBergomi · Copula tail dependence · Granger causality VAR · Multifractal MF-DFA · all 9 agent factor breakdowns · settings reference · full API docs
 
 ---
 
@@ -677,6 +750,8 @@ A complete **technical reference** is included covering every formula, theory, a
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Parallel_DAG-FF6B35?style=flat-square&logo=langchain&logoColor=white)
+![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat-square&logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-Build-646CFF?style=flat-square&logo=vite&logoColor=white)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-orange?style=flat-square)
 ![SQLite](https://img.shields.io/badge/SQLite-SQLAlchemy-003B57?style=flat-square&logo=sqlite&logoColor=white)
 ![Gemini](https://img.shields.io/badge/Gemini-2.0_Flash-4285F4?style=flat-square&logo=google&logoColor=white)

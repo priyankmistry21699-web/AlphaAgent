@@ -99,7 +99,19 @@ class IndicatorResult:
     warnings: list = field(default_factory=list)
 
 
-def compute_indicators(df: pd.DataFrame) -> IndicatorResult:
+def _rsi_thresholds(ticker: str) -> tuple:
+    """Return (oversold, overbought) RSI thresholds based on asset class."""
+    t = ticker.upper()
+    if t.endswith("-USD") or t.endswith("-USDT") or t.endswith("-BTC"):
+        return 25, 75          # crypto — high vol, wider bands
+    if t.endswith("=X"):
+        return 28, 72          # forex — slightly wider
+    if t.startswith("^") or t in ("TLT", "IEF", "SHY", "BND", "AGG"):
+        return 35, 65          # indices / bonds — tighter
+    return 30, 70              # default equities
+
+
+def compute_indicators(df: pd.DataFrame, ticker: str = "") -> IndicatorResult:
     """
     Compute all technical indicators from OHLCV data.
     
@@ -129,10 +141,10 @@ def compute_indicators(df: pd.DataFrame) -> IndicatorResult:
     try:
         rsi_indicator = ta.momentum.RSIIndicator(close, window=14)
         result.rsi = float(rsi_indicator.rsi().iloc[-1])
-        
-        if result.rsi < 30:
+        rsi_os, rsi_ob = _rsi_thresholds(ticker)
+        if result.rsi < rsi_os:
             result.rsi_signal = "oversold"        # Bullish signal
-        elif result.rsi > 70:
+        elif result.rsi > rsi_ob:
             result.rsi_signal = "overbought"      # Bearish signal
         else:
             result.rsi_signal = "neutral"

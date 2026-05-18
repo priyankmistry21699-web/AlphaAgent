@@ -31,11 +31,18 @@ technical:
   min_data_days: 50
   min_momentum_days: 100
   leaderboard_window: 20
+  bw_narrow: 20
+  bw_wide: 40
 simulation:
   num_paths: 5000
   ci_level_1: 0.68
   ci_level_2: 0.95
   ci_level_3: 0.99
+  paths_by_regime_low: 3000
+  paths_by_regime_normal: 5000
+  paths_by_regime_high: 8000
+  paths_by_regime_extreme: 10000
+  daily_drift: 0.0005
 volatility:
   regime_low_pct: 25
   regime_normal_pct: 75
@@ -111,6 +118,8 @@ fundamental:
   pe_cheap: 15
   pe_fair: 25
   pe_expensive: 40
+  gross_margin_strong: 40
+  quality_value_blend: 0.65
 macro:
   yield_curve_positive: 0.5
   yield_curve_inverted: -0.5
@@ -139,6 +148,12 @@ macro:
   tips_breakeven_danger: 3.0
   cpi_target: 2.5
   cpi_elevated: 5.0
+  pce_target: 2.0
+  pce_near_target: 2.5
+  pce_elevated: 3.5
+  amihud_stress_threshold: 2.0
+  bond_equity_stress_corr: 0.3
+  sofr_critical_spread: 0.50
 geopolitical:
   credit_deterioration: 1.0
   sector_rotation_formula:
@@ -176,6 +191,23 @@ risk:
   correlation_delta_threshold: 0.1
   correlation_min_days: 60
   correlation_long_days: 252
+  black_swan_sigma: 5.0
+  flash_crash_ticker_pct: 7.0
+  flash_crash_spy_pct: 5.0
+  geo_shock_vix: 35.0
+  geo_shock_gold_pct: 2.0
+  geo_shock_oil_pct: 5.0
+  carry_unwind_usdjpy: 125.0
+  carry_unwind_yen_pct: 1.5
+  vanna_negative_threshold: 0.5
+  black_swan_prob_up: 0.10
+  geo_shock_multiplier: 0.35
+  geo_shock_prob_up: 0.30
+  carry_unwind_multiplier: 0.50
+  extreme_vol_prob_up: 0.20
+  high_vol_prob_up: 0.40
+  high_vol_multiplier: 0.50
+  kl_divergence_threshold: 1.0
 backtest:
   initial_capital: 100000
   default_hold_days: 5
@@ -186,8 +218,15 @@ backtest:
   kelly_fraction: 0.10
   lookback_days: 252
   buffer_days: 30
+  risk_free_rate: 0.05
+  calibration_lookback_days: 126
+  calibration_rsi_window: 15
+  calibration_min_similar: 5
+  news_decay_halflife_days: 4.6
+  cross_sectional_peers: 5
+  reddit_post_limit: 15
 cache:
-  price_ttl_seconds: 300
+  price_ttl_seconds: 3600
   info_ttl_seconds: 86400
   financials_ttl_seconds: 604800
   options_ttl_seconds: 300
@@ -214,6 +253,17 @@ agent_defaults:
 calibration:
   rolling_window: 20
   min_trades_for_calibration: 10
+sentiment:
+  social_score_base: 40.0
+  social_score_mult: 4.0
+api_keys:
+  quiverquant: ""
+ollama:
+  enabled: true
+  host: "http://localhost"
+  port: 11435
+  model: "mistral:latest"
+  prefer_ollama: false
 infrastructure:
   server_host: 127.0.0.1
   server_port: 8000

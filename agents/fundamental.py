@@ -82,7 +82,7 @@ class FundamentalAgent(BaseAgent):
             "margin": FactorScore(
                 name="Gross Margin",
                 value=scores.gross_margin,
-                score=100.0 if scores.gross_margin > 40 else (scores.gross_margin / 40) * 100,
+                score=100.0 if scores.gross_margin > sf.get("gross_margin_strong", 40) else (scores.gross_margin / sf.get("gross_margin_strong", 40)) * 100,
                 interpretation=f"Margin: {scores.gross_margin:.1f}%",
             ),
             "debt": FactorScore(
@@ -633,6 +633,362 @@ class FundamentalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: P/E vs Sector Median ─────────────────────────────────────
+        try:
+            import yfinance as _yf_sec
+            _sector_etf_map = {
+                "Technology": "XLK", "Communication Services": "XLC",
+                "Consumer Discretionary": "XLY", "Consumer Staples": "XLP",
+                "Health Care": "XLV", "Industrials": "XLI", "Materials": "XLB",
+                "Energy": "XLE", "Financials": "XLF", "Real Estate": "XLRE", "Utilities": "XLU",
+            }
+            _sector_name = info.get("sector", "")
+            _sec_etf = _sector_etf_map.get(_sector_name, "SPY")
+            _sec_info = _yf_sec.Ticker(_sec_etf).info
+            _sector_pe = _sec_info.get("trailingPE") or _sec_info.get("forwardPE")
+            _stock_pe  = info.get("trailingPE") or info.get("forwardPE")
+            if _sector_pe and _stock_pe and float(_sector_pe) > 0 and float(_stock_pe) > 0:
+                _pe_rel = float(_stock_pe) / float(_sector_pe)
+                _pe_vs_sec_score = (85.0 if _pe_rel < 0.8 else 65.0 if _pe_rel < 1.0 else 45.0 if _pe_rel < 1.3 else 20.0)
+                factor_scores["pe_vs_sector"] = FactorScore(
+                    name="P/E vs Sector Median",
+                    value=round(_pe_rel, 3),
+                    score=_pe_vs_sec_score,
+                    interpretation=f"Stock P/E {float(_stock_pe):.1f}x vs {_sec_etf} median {float(_sector_pe):.1f}x → ratio {_pe_rel:.2f}x ({'cheap vs sector' if _pe_rel < 0.9 else 'expensive vs sector' if _pe_rel > 1.2 else 'fair value vs peers'})",
+                )
+        except Exception:
+            pass
+
+        # ── New: P/E vs 5-Year Historical Average ─────────────────────────
+        try:
+            import yfinance as _yf_pe5
+            import numpy as _np_pe5
+            import pandas as _pd_pe5
+            _pe_now5 = info.get("trailingPE")
+            _shares5 = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding") or 1
+            if _pe_now5 and float(_pe_now5) > 0 and not inc.empty:
+                _ni_row5 = [r for r in inc.index if 'net income' in str(r).lower()]
+                if _ni_row5 and len(inc.columns) >= 4:
+                    _ph5 = _yf_pe5.download(ticker, period="5y", interval="3mo",
+                                             auto_adjust=True, progress=False)
+                    if not _ph5.empty:
+                        _close5 = _ph5["Close"].squeeze().dropna()
+                        _ni_ser5 = inc.loc[_ni_row5[0]].dropna()
+                        _pe_hist5 = []
+                        for _ci5 in range(min(8, len(_ni_ser5))):
+                            _col_dt5 = _ni_ser5.index[_ci5]
+                            _ni_val5 = float(_ni_ser5.iloc[_ci5])
+                            _eps5 = _ni_val5 / _shares5
+                            if _eps5 > 0:
+                                try:
+                                    _idx5 = _close5.index.get_indexer(
+                                        [_pd_pe5.Timestamp(_col_dt5)], method="nearest"
+                                    )[0]
+                                    _p5 = float(_close5.iloc[_idx5])
+                                    _pe_hist5.append(_p5 / _eps5)
+                                except Exception:
+                                    pass
+                        if len(_pe_hist5) >= 3:
+                            _avg_pe5 = float(_np_pe5.median(_pe_hist5))
+                            _pe_vs5 = float(_pe_now5) / _avg_pe5 if _avg_pe5 > 0 else 1.0
+                            _pev5_score = (80.0 if _pe_vs5 < 0.85 else 60.0 if _pe_vs5 < 1.0 else 40.0 if _pe_vs5 < 1.3 else 15.0)
+                            factor_scores["pe_vs_5yr_avg"] = FactorScore(
+                                name="P/E vs 5-Year Average",
+                                value=round(_pe_vs5, 3),
+                                score=_pev5_score,
+                                interpretation=f"Current P/E {float(_pe_now5):.1f}x vs 5Y median {_avg_pe5:.1f}x → {(_pe_vs5-1)*100:+.0f}% relative ({'historically cheap' if _pe_vs5 < 0.85 else 'historically expensive' if _pe_vs5 > 1.2 else 'near historical norm'})",
+                            )
+        except Exception:
+            pass
+
+        # ── New: Earnings Consistency (Coefficient of Variation of EPS) ───
+        try:
+            import numpy as _np_ec
+            _ni_rows_ec = [r for r in inc.index if 'net income' in str(r).lower()]
+            _shares_ec  = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding") or 1
+            if _ni_rows_ec and len(inc.columns) >= 4 and _shares_ec:
+                _ni_ec = [float(inc.loc[_ni_rows_ec[0]].iloc[i]) / _shares_ec
+                          for i in range(min(8, len(inc.columns)))]
+                _ni_ec = [v for v in _ni_ec if not _np_ec.isnan(v)]
+                if len(_ni_ec) >= 4:
+                    _std_ec  = float(_np_ec.std(_ni_ec))
+                    _mean_ec = abs(float(_np_ec.mean(_ni_ec)))
+                    _cov_ec  = _std_ec / _mean_ec if _mean_ec > 0 else 99.0
+                    _ec_score = (85.0 if _cov_ec < 0.2 else 65.0 if _cov_ec < 0.4 else 45.0 if _cov_ec < 0.7 else 20.0)
+                    factor_scores["earnings_consistency"] = FactorScore(
+                        name="Earnings Consistency (CoV)",
+                        value=round(_cov_ec, 3),
+                        score=_ec_score,
+                        interpretation=f"Quarterly EPS CoV: {_cov_ec:.2f} ({'highly consistent' if _cov_ec < 0.2 else 'volatile earnings' if _cov_ec > 0.7 else 'moderate consistency'}) — latest EPS ${_ni_ec[0]:.2f}",
+                    )
+        except Exception:
+            pass
+
+        # ── New: CEO/CFO Departure Signal (EDGAR 8-K Search) ─────────────
+        try:
+            import requests as _req_dep
+            import datetime as _dt_dep
+            _dep_start = (_dt_dep.date.today() - _dt_dep.timedelta(days=90)).isoformat()
+            _dep_url = (
+                f"https://efts.sec.gov/LATEST/search-index?"
+                f"q=%22{ticker}%22+%22departure%22&forms=8-K"
+                f"&dateRange=custom&startdt={_dep_start}"
+            )
+            _dep_resp = _req_dep.get(
+                _dep_url, timeout=5,
+                headers={"User-Agent": "AlphaAgent alphaagent@research.example.com"}
+            )
+            if _dep_resp.ok:
+                _dep_data = _dep_resp.json()
+                _dep_hits = _dep_data.get("hits", {}).get("total", {})
+                _dep_count = _dep_hits.get("value", 0) if isinstance(_dep_hits, dict) else int(_dep_hits)
+                _dep_score = (20.0 if _dep_count > 0 else 65.0)
+                factor_scores["ceo_cfoo_departure"] = FactorScore(
+                    name="CEO/CFO Departure (8-K Signal)",
+                    value=float(_dep_count),
+                    score=_dep_score,
+                    interpretation=f"8-K departure filings (90d): {_dep_count} ({'leadership change detected' if _dep_count > 0 else 'no departure signal'})",
+                )
+                if _dep_count > 0:
+                    warnings.append(f"CEO/CFO DEPARTURE: {_dep_count} 8-K filing(s) mentioning departure in last 90 days.")
+        except Exception:
+            pass
+
+        # ── New: M&A Activity Signal (EDGAR 8-K EFTS) ────────────────────
+        try:
+            import requests as _req_ma
+            import datetime as _dt_ma
+            _ma_start = (_dt_ma.date.today() - _dt_ma.timedelta(days=180)).isoformat()
+            _ma_total = 0
+            for _ma_kw in ["merger", "acquisition"]:
+                try:
+                    _ma_url = (
+                        f"https://efts.sec.gov/LATEST/search-index?"
+                        f"q=%22{ticker}%22+%22{_ma_kw}%22&forms=8-K"
+                        f"&dateRange=custom&startdt={_ma_start}"
+                    )
+                    _ma_resp = _req_ma.get(
+                        _ma_url, timeout=5,
+                        headers={"User-Agent": "AlphaAgent alphaagent@research.example.com"}
+                    )
+                    if _ma_resp.ok:
+                        _ma_data = _ma_resp.json()
+                        _ma_hits = _ma_data.get("hits", {}).get("total", {})
+                        _ma_count = _ma_hits.get("value", 0) if isinstance(_ma_hits, dict) else int(_ma_hits)
+                        _ma_total += _ma_count
+                except Exception:
+                    pass
+            _ma_score = (75.0 if _ma_total > 2 else 65.0 if _ma_total > 0 else 50.0)
+            factor_scores["ma_activity"] = FactorScore(
+                name="M&A Activity (EDGAR 8-K)",
+                value=float(_ma_total),
+                score=_ma_score,
+                interpretation=f"8-K filings mentioning merger/acquisition (180d): {_ma_total} — {'active deal-making' if _ma_total > 2 else 'some M&A activity' if _ma_total > 0 else 'no M&A signal'}",
+            )
+            if _ma_total > 0:
+                warnings.append(f"M&A ACTIVITY: {_ma_total} 8-K filing(s) mentioning merger/acquisition — potential catalyst.")
+        except Exception:
+            pass
+
+        # ── New: Earnings Revision Momentum (EPS Estimate Trend) ─────────
+        try:
+            import yfinance as _yf_erm
+            _erm_trend = _yf_erm.Ticker(ticker).eps_trend
+            if _erm_trend is not None and not _erm_trend.empty:
+                for _hz in ["0y", "+1y", "0q", "+1q"]:
+                    if _hz not in _erm_trend.index:
+                        continue
+                    _row = _erm_trend.loc[_hz]
+                    _c   = _row.get("current");   _a30 = _row.get("30daysAgo")
+                    _a60 = _row.get("60daysAgo")
+                    if _c is None or _a30 is None:
+                        continue
+                    _c = float(_c); _a30 = float(_a30)
+                    if _a30 == 0:
+                        continue
+                    _rev30 = (_c - _a30) / abs(_a30) * 100
+                    _rev60 = ((_c - float(_a60)) / abs(float(_a60)) * 100
+                               if _a60 is not None and float(_a60) != 0 else 0.0)
+                    _erm_score = (88.0 if _rev30 > 5 else
+                                  72.0 if _rev30 > 2 else
+                                  60.0 if _rev30 > 0 else
+                                  40.0 if _rev30 > -2 else
+                                  25.0 if _rev30 > -5 else
+                                  12.0)
+                    factor_scores["earnings_revision"] = FactorScore(
+                        name="Earnings Revision Momentum",
+                        value=round(_rev30, 2),
+                        score=_erm_score,
+                        interpretation=(
+                            f"EPS est ({_hz}): {_rev30:+.1f}% (30d) / {_rev60:+.1f}% (60d) — "
+                            f"{'rising — analysts upgrading' if _rev30 > 0 else 'falling — analysts cutting'}"
+                        ),
+                    )
+                    if _rev30 > 3:
+                        warnings.append(f"ESTIMATE UPGRADE: EPS ({_hz}) raised {_rev30:+.1f}% in 30d — bullish revision momentum.")
+                    elif _rev30 < -3:
+                        warnings.append(f"ESTIMATE CUT: EPS ({_hz}) lowered {_rev30:+.1f}% in 30d — bearish revision momentum.")
+                    break
+        except Exception:
+            pass
+
+        # ── New: Graham Number (Intrinsic Value Floor) ────────────────────
+        try:
+            import math as _math_gn
+            _gn_eps  = info.get("trailingEps") or info.get("epsTrailingTwelveMonths")
+            _gn_bvps = info.get("bookValue")
+            _gn_px   = info.get("currentPrice") or info.get("regularMarketPrice")
+            if _gn_eps and _gn_bvps and _gn_px:
+                _eps = float(_gn_eps); _bvps = float(_gn_bvps); _px = float(_gn_px)
+                if _eps > 0 and _bvps > 0 and _px > 0:
+                    _graham = _math_gn.sqrt(22.5 * _eps * _bvps)
+                    _gn_upside = (_graham - _px) / _px * 100
+                    _gn_score  = (90.0 if _gn_upside > 30 else
+                                  75.0 if _gn_upside > 15 else
+                                  60.0 if _gn_upside > 0 else
+                                  42.0 if _gn_upside > -20 else
+                                  20.0)
+                    factor_scores["graham_number"] = FactorScore(
+                        name="Graham Number (Intrinsic Floor)",
+                        value=round(_graham, 2),
+                        score=_gn_score,
+                        interpretation=(
+                            f"Graham √(22.5×EPS×BVPS) = ${_graham:.2f} vs price ${_px:.2f} → "
+                            f"{_gn_upside:+.1f}% {'upside (undervalued)' if _gn_upside > 0 else 'overvalued vs intrinsic floor'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: Earnings Call NLP (Gemini — Quarterly Results Tone) ─────────
+        try:
+            import os as _os_ec
+            import yfinance as _yf_ec
+            _gemini_key = _os_ec.getenv("GEMINI_API_KEY")
+            if _gemini_key:
+                import google.genai as _genai_ec
+                _tkr_ec = _yf_ec.Ticker(ticker)
+                _qfin   = _tkr_ec.quarterly_financials
+                _ec_parts = []
+                if _qfin is not None and not _qfin.empty:
+                    _ec_parts.append(f"Quarterly financials (last 2 periods):\n{_qfin.iloc[:8, :2].to_string()}")
+                _target_p = info.get("targetMeanPrice")
+                _price_p  = info.get("currentPrice") or info.get("regularMarketPrice")
+                if _target_p and _price_p:
+                    _ec_parts.append(f"Analyst target ${float(_target_p):.2f} vs price ${float(_price_p):.2f} ({(float(_target_p)/float(_price_p)-1)*100:+.1f}% upside)")
+                _rec_key = info.get("recommendationKey", "")
+                if _rec_key:
+                    _ec_parts.append(f"Consensus: {_rec_key}")
+                for _n in (_tkr_ec.news or [])[:4]:
+                    _nt = _n.get("title", "")
+                    if any(kw in _nt.lower() for kw in ["earn", "revenue", "eps", "quarter", "q1", "q2", "q3", "q4", "beat", "miss", "guid"]):
+                        _ec_parts.append(f"News: {_nt}")
+                if _ec_parts:
+                    _ec_client = _genai_ec.Client(api_key=_gemini_key)
+                    _ec_prompt = (
+                        f"Analyze earnings quality for {ticker}:\n\n"
+                        + "\n".join(_ec_parts)
+                        + "\n\nRespond ONLY in this exact format:\n"
+                        "EARNINGS_QUALITY: [STRONG/ADEQUATE/WEAK]\n"
+                        "REVENUE_TREND: [ACCELERATING/STABLE/DECELERATING]\n"
+                        "GUIDANCE_TONE: [RAISED/MAINTAINED/LOWERED/ABSENT]\n"
+                        "RED_FLAGS: [YES/NO]\n"
+                        "EARNINGS_SCORE: [0-100]\n"
+                    )
+                    _ec_resp = _ec_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=_ec_prompt,
+                        config=_genai_ec.types.GenerateContentConfig(temperature=0.0),
+                    )
+                    _ec_parsed = {}
+                    for _line in _ec_resp.text.split("\n"):
+                        if ":" in _line:
+                            _ek, _ev = _line.split(":", 1)
+                            _ec_parsed[_ek.strip()] = _ev.strip()
+                    _eq  = _ec_parsed.get("EARNINGS_QUALITY", "ADEQUATE")
+                    _rt  = _ec_parsed.get("REVENUE_TREND", "STABLE")
+                    _gt  = _ec_parsed.get("GUIDANCE_TONE", "MAINTAINED")
+                    _rf  = _ec_parsed.get("RED_FLAGS", "NO")
+                    _es  = min(100.0, max(0.0, float(_ec_parsed.get("EARNINGS_SCORE", "50"))))
+                    _ec_score = max(10.0, min(90.0, _es))
+                    factor_scores["earnings_call_nlp"] = FactorScore(
+                        name="Earnings Call NLP (Gemini)",
+                        value=round(_es / 100.0, 3),
+                        score=_ec_score,
+                        interpretation=f"Quality: {_eq} | Revenue: {_rt} | Guidance: {_gt} | Red flags: {_rf} (score: {_es:.0f}/100)",
+                    )
+                    if _rf == "YES":
+                        warnings.append(f"Earnings NLP: red flags detected in latest quarterly results.")
+                    if _gt == "RAISED" and _eq == "STRONG":
+                        reasoning.append(f"Earnings NLP: strong quality + raised guidance — positive catalyst.")
+                    elif _eq == "WEAK" and _rf == "YES":
+                        reasoning.append(f"Earnings NLP: weak earnings quality with red flags — negative fundamental signal.")
+        except Exception:
+            pass
+
+        # ── New: Net Debt / EBITDA (Leverage Ratio) ──────────────────────
+        try:
+            import yfinance as _yf_nd
+            _tick_nd = _yf_nd.Ticker(ticker)
+            _bs_nd   = _tick_nd.balance_sheet
+            _is_nd   = _tick_nd.income_stmt
+            if _bs_nd is not None and not _bs_nd.empty and _is_nd is not None and not _is_nd.empty:
+                def _row(df, *keys):
+                    for k in keys:
+                        matches = [c for c in df.index if k.lower() in c.lower()]
+                        if matches:
+                            v = df.loc[matches[0]].iloc[0]
+                            if v != 0:
+                                return float(v)
+                    return None
+                _total_debt = _row(_bs_nd, "Total Debt", "Long Term Debt") or 0.0
+                _cash       = _row(_bs_nd, "Cash And Cash Equivalents", "Cash") or 0.0
+                _ebitda     = _row(_is_nd, "EBITDA", "Normalized EBITDA") or None
+                if _ebitda and _ebitda != 0:
+                    _net_debt    = _total_debt - _cash
+                    _nd_ebitda   = _net_debt / abs(_ebitda)
+                    _nd_score    = (75.0 if _nd_ebitda < 1.0 else 60.0 if _nd_ebitda < 2.5 else 40.0 if _nd_ebitda < 4.0 else 20.0)
+                    factor_scores["net_debt_ebitda"] = FactorScore(
+                        name="Net Debt / EBITDA",
+                        value=round(_nd_ebitda, 2),
+                        score=_nd_score,
+                        interpretation=(
+                            f"Net debt: ${_net_debt / 1e9:.2f}B | EBITDA: ${_ebitda / 1e9:.2f}B | "
+                            f"Leverage: {_nd_ebitda:.2f}x — "
+                            f"{'low leverage' if _nd_ebitda < 1.0 else 'moderate' if _nd_ebitda < 2.5 else 'elevated' if _nd_ebitda < 4.0 else 'high leverage risk'}"
+                        ),
+                    )
+                    if _nd_ebitda > 4.0:
+                        warnings.append(f"High leverage: Net Debt/EBITDA {_nd_ebitda:.1f}x — debt servicing risk.")
+        except Exception:
+            pass
+
+        # ── New: Dividend Yield + Payout Ratio ───────────────────────────
+        try:
+            import yfinance as _yf_div
+            _tick_dv = _yf_div.Ticker(ticker)
+            _info_dv = _tick_dv.info or {}
+            _div_yield   = _info_dv.get("dividendYield", None) or _info_dv.get("trailingAnnualDividendYield", None)
+            _payout      = _info_dv.get("payoutRatio", None)
+            if _div_yield is not None:
+                _div_pct = float(_div_yield) * 100
+                _dv_score = (70.0 if 2.0 <= _div_pct <= 5.0 else 55.0 if _div_pct > 5.0 else 45.0 if _div_pct > 0 else 40.0)
+                _payout_str = f" | payout: {float(_payout)*100:.0f}%" if _payout else ""
+                if _payout and float(_payout) > 0.90:
+                    _dv_score = min(_dv_score, 35.0)
+                    warnings.append(f"Payout ratio {float(_payout)*100:.0f}% — dividend sustainability risk.")
+                factor_scores["dividend_yield"] = FactorScore(
+                    name="Dividend Yield & Payout",
+                    value=round(_div_pct, 2),
+                    score=_dv_score,
+                    interpretation=(
+                        f"Yield: {_div_pct:.2f}%{_payout_str} — "
+                        f"{'attractive income' if 2.0 <= _div_pct <= 5.0 else 'potentially unsustainable yield' if _div_pct > 5.0 else 'low yield / growth stock' if _div_pct > 0 else 'no dividend'}"
+                    ),
+                )
+        except Exception:
+            pass
+
         # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
         try:
             import numpy as _np_pca
@@ -687,7 +1043,8 @@ class FundamentalAgent(BaseAgent):
         if val_scores:
             val_avg = sum(val_scores) / len(val_scores)
             val_prob = self._map_score_to_probability(val_avg, min_val=0, max_val=100)
-            base_prob = 0.65 * base_prob + 0.35 * val_prob
+            _qv_blend = sf.get("quality_value_blend", 0.65)
+            base_prob = _qv_blend * base_prob + (1.0 - _qv_blend) * val_prob
 
         prob_up = max(0.01, min(0.99, base_prob))
 

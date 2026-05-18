@@ -2,20 +2,26 @@
 
 > Every factor that feeds into the final probability: **P(stock goes up) = 73%**
 
+> **Updated May 2026 — Tier 1/2/3/4 factors added. See `QUANT_THEORIES_DEEP_DIVE.md` for full implementation log.**
+
 ---
 
 ## The Pipeline at a Glance
 
 ```
-RAW DATA (10 sources)
+RAW DATA (12+ sources)
     ↓
-151 INDIVIDUAL FACTORS (computed by 8 agents) + 3 scoring models
+226+ INDIVIDUAL FACTORS (computed by 9 agents) + scoring models
     ↓
-8 AGENT PROBABILITIES (each agent → one P(up))
+9 AGENT PROBABILITIES (each agent → one P(up))
     ↓
-BAYESIAN FUSION (combine into one number)
+BAYESIAN FUSION (correlation-adjusted log-odds combination)
     ↓
-FINAL OUTPUT: P(up) = 73%, Conviction = HIGH
+DYNAMIC HORIZON REWEIGHTING (1D/1W/1M/3M/6M/1Y)
+    ↓
+RISK CIRCUIT BREAKER (6-tier override cascade)
+    ↓
+FINAL OUTPUT: P(up) = 73%, Conviction = HIGH, Kelly Position Size
 ```
 
 ---

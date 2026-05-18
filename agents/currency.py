@@ -244,14 +244,15 @@ class CurrencyAgent(BaseAgent):
             fed_series = macro_data.get_series("FEDFUNDS", years_back=1)
             if fed_series is not None and len(fed_series) >= 1:
                 us_rate = float(fed_series.iloc[-1].iloc[0])
-                # Proxy: ECB rate is approx 0.5-1% below Fed in current cycle
-                rate_diff = us_rate - 3.5   # rough ECB/global benchmark
+                ecb_series = macro_data.get_series("ECBDFR", years_back=1)
+                global_rate = float(ecb_series.iloc[-1].iloc[0]) if ecb_series is not None and len(ecb_series) >= 1 else us_rate
+                rate_diff = us_rate - global_rate
                 carry_score = (70.0 if rate_diff > 1.0 else 50.0 if rate_diff > 0 else 35.0)
                 factor_scores["carry_trade"] = FactorScore(
                     name="Carry Trade (USD Rate Advantage)",
                     value=round(rate_diff, 2),
                     score=carry_score,
-                    interpretation=f"US-Global rate diff: {rate_diff:+.2f}% — {'USD carry attractive' if rate_diff > 1 else 'narrowing carry' if rate_diff < 0 else 'moderate carry'}",
+                    interpretation=f"Fed {us_rate:.2f}% vs ECB {global_rate:.2f}% → diff {rate_diff:+.2f}% — {'USD carry attractive' if rate_diff > 1 else 'narrowing carry' if rate_diff < 0 else 'moderate carry'}",
                 )
         except Exception:
             pass
@@ -290,6 +291,27 @@ class CurrencyAgent(BaseAgent):
                     score=emfx_score,
                     interpretation=f"EEM 1M momentum: {eem_mom:+.1f}% — {'EM strength' if eem_mom > 5 else 'EM weakness/capital flight' if eem_mom < -5 else 'neutral'}",
                 )
+        except Exception:
+            pass
+
+        # ── New: DXY vs SMA(50) — Trend Direction ─────────────────────────
+        try:
+            dxy_s = yf.download("DX-Y.NYB", period="6mo", interval="1d",
+                                auto_adjust=True, progress=False)
+            if not dxy_s.empty and len(dxy_s) >= 50:
+                dxy_c = dxy_s["Close"].squeeze().dropna()
+                dxy_now_p = float(dxy_c.iloc[-1])
+                dxy_sma50 = float(dxy_c.iloc[-50:].mean())
+                dxy_pct_above = (dxy_now_p / dxy_sma50 - 1) * 100
+                dxy_sma_score = max(10.0, min(90.0, 50.0 - dxy_pct_above * 5.0))
+                factor_scores["dxy_sma50"] = FactorScore(
+                    name="DXY vs SMA(50)",
+                    value=round(dxy_pct_above, 2),
+                    score=dxy_sma_score,
+                    interpretation=f"DXY {dxy_pct_above:+.1f}% {'above' if dxy_pct_above > 0 else 'below'} 50d SMA — {'USD uptrend (multi-national headwind)' if dxy_pct_above > 1 else 'USD downtrend (earnings tailwind)' if dxy_pct_above < -1 else 'DXY at trend support/resistance'}",
+                )
+                if dxy_pct_above > 3:
+                    warnings.append(f"DXY {dxy_pct_above:.1f}% above 50-SMA — strong dollar trend, earnings headwind for exporters.")
         except Exception:
             pass
 

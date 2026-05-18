@@ -30,19 +30,19 @@ export const AGENT_THEORIES = {
   },
   Fundamental: {
     color: 'tag-green',
-    tags: ['Piotroski','Altman Z','Beneish M','P/E','P/B','FCF Yield','ROE','FF5','CAPM Alpha','Accruals','PCA'],
+    tags: ['Piotroski','Altman Z','Beneish M','P/E','P/B','FCF Yield','ROE','FF5','CAPM Alpha','Accruals','M&A Activity','PCA'],
   },
   Macro: {
     color: 'tag-purple',
-    tags: ['VIX','Yield Curve','DXY','ISM','CPI','Amihud','SOFR','Fed BS','SOX','PCA'],
+    tags: ['VIX','Yield Curve','DXY','ISM','CPI','Amihud','SOFR','Fed BS','SOX','Sector RS','Contagion Corr','Real Rate','PCA'],
   },
   Sentiment: {
     color: 'tag-orange',
-    tags: ['NLP News','Short Int','Fear/Greed','P/C Ratio','Transfer Entropy','Shannon Entropy','AAII','PT Upside'],
+    tags: ['NLP News','Short Int','Fear/Greed','P/C Ratio','Transfer Entropy','Shannon Entropy','AAII','PT Upside','Source Cred','HL/Body Align'],
   },
   Insider: {
     color: 'tag-cyan',
-    tags: ['Form 4','Cluster Buys','Kyle λ','Float','Inst Ownership'],
+    tags: ['Form 4','Cluster Buys','Kyle λ','Float','Inst Ownership','FINRA Short Vol','ETF Flow','Activist 13D','Top-10 HHI'],
   },
   Risk: {
     color: 'tag-red',
@@ -50,7 +50,7 @@ export const AGENT_THEORIES = {
   },
   Geopolitical: {
     color: 'tag-yellow',
-    tags: ['Oil','GPR Index','Election Cycle','Transport','Commodity','EM Stress'],
+    tags: ['Oil','GPR Index','Election Cycle','Transport','Commodity','EM Stress','Active Conflict','Sanctions','Tariff Risk'],
   },
   Volatility: {
     color: 'tag-orange',
@@ -123,4 +123,173 @@ export const FACTOR_ENC = {
 
 export const QUICK_CHIPS = [
   'Buy now?', 'Key risks', 'Why bullish?', 'Agent votes', 'Entry timing', 'Hold period',
+];
+
+export const TICKER_CATEGORIES = [
+  { id: 'us', label: '🇺🇸 US', sub: [
+    { id: 'stocks', label: 'Stocks', tickers: [
+      {sym:'AAPL',name:'Apple'},{sym:'NVDA',name:'NVIDIA'},{sym:'MSFT',name:'Microsoft'},
+      {sym:'AMZN',name:'Amazon'},{sym:'GOOGL',name:'Alphabet'},{sym:'META',name:'Meta'},
+      {sym:'TSLA',name:'Tesla'},{sym:'BRK-B',name:'Berkshire'},{sym:'JPM',name:'JPMorgan'},
+      {sym:'LLY',name:'Eli Lilly'},{sym:'UNH',name:'UnitedHealth'},{sym:'V',name:'Visa'},
+      {sym:'XOM',name:'ExxonMobil'},{sym:'MA',name:'Mastercard'},{sym:'WMT',name:'Walmart'},
+      {sym:'HD',name:'Home Depot'},{sym:'PG',name:'P&G'},{sym:'COST',name:'Costco'},
+      {sym:'AVGO',name:'Broadcom'},{sym:'MRK',name:'Merck'},{sym:'ABBV',name:'AbbVie'},
+      {sym:'AMD',name:'AMD'},{sym:'NFLX',name:'Netflix'},{sym:'CRM',name:'Salesforce'},
+      {sym:'BAC',name:'Bank of America'},{sym:'ORCL',name:'Oracle'},{sym:'KO',name:'Coca-Cola'},
+      {sym:'GS',name:'Goldman Sachs'},{sym:'PFE',name:'Pfizer'},{sym:'DIS',name:'Disney'},
+      {sym:'INTC',name:'Intel'},{sym:'PLTR',name:'Palantir'},{sym:'COIN',name:'Coinbase'},
+      {sym:'SHOP',name:'Shopify'},{sym:'UBER',name:'Uber'},{sym:'ABNB',name:'Airbnb'},
+      {sym:'RIVN',name:'Rivian'},{sym:'MELI',name:'MercadoLibre'},{sym:'SNOW',name:'Snowflake'},
+    ]},
+    { id: 'etfs', label: 'ETFs & Funds', tickers: [
+      {sym:'SPY',name:'S&P 500'},{sym:'QQQ',name:'NASDAQ 100'},{sym:'IWM',name:'Russell 2000'},
+      {sym:'DIA',name:'Dow Jones'},{sym:'VTI',name:'Total US Mkt'},{sym:'VOO',name:'Vanguard S&P'},
+      {sym:'SCHD',name:'Dividend'},{sym:'ARKK',name:'ARK Innovation'},{sym:'VNQ',name:'Real Estate'},
+      {sym:'AGG',name:'US Bonds'},{sym:'TLT',name:'20Y Treasury'},{sym:'HYG',name:'High Yield Bonds'},
+      {sym:'LQD',name:'IG Bonds'},{sym:'GLD',name:'Gold ETF'},{sym:'SLV',name:'Silver ETF'},
+    ]},
+    { id: 'sectors', label: 'Sectors', tickers: [
+      {sym:'XLK',name:'Technology'},{sym:'XLF',name:'Financials'},{sym:'XLE',name:'Energy'},
+      {sym:'XLV',name:'Healthcare'},{sym:'XLI',name:'Industrials'},{sym:'XLB',name:'Materials'},
+      {sym:'XLU',name:'Utilities'},{sym:'XLP',name:'Consumer Staples'},{sym:'XLY',name:'Consumer Disc.'},
+      {sym:'XLRE',name:'Real Estate'},{sym:'XLC',name:'Comm. Services'},{sym:'VGT',name:'Info Tech'},
+    ]},
+    { id: 'indices', label: 'Indices', tickers: [
+      {sym:'^GSPC',name:'S&P 500'},{sym:'^IXIC',name:'NASDAQ Composite'},
+      {sym:'^DJI',name:'Dow Jones'},{sym:'^RUT',name:'Russell 2000'},
+      {sym:'^VIX',name:'VIX Fear Index'},
+    ]},
+  ]},
+
+  { id: 'india', label: '🇮🇳 India', sub: [
+    { id: 'stocks', label: 'Stocks', tickers: [
+      {sym:'RELIANCE.NS',name:'Reliance Ind.'},{sym:'TCS.NS',name:'TCS'},
+      {sym:'HDFCBANK.NS',name:'HDFC Bank'},{sym:'ICICIBANK.NS',name:'ICICI Bank'},
+      {sym:'INFY.NS',name:'Infosys'},{sym:'WIPRO.NS',name:'Wipro'},
+      {sym:'BAJFINANCE.NS',name:'Bajaj Finance'},{sym:'ITC.NS',name:'ITC'},
+      {sym:'HINDUNILVR.NS',name:'HUL'},{sym:'MARUTI.NS',name:'Maruti Suzuki'},
+      {sym:'TATAMOTORS.NS',name:'Tata Motors'},{sym:'SBIN.NS',name:'SBI'},
+      {sym:'LT.NS',name:'L&T'},{sym:'KOTAKBANK.NS',name:'Kotak Bank'},
+      {sym:'HCLTECH.NS',name:'HCL Tech'},{sym:'AXISBANK.NS',name:'Axis Bank'},
+      {sym:'TITAN.NS',name:'Titan'},{sym:'ASIANPAINT.NS',name:'Asian Paints'},
+      {sym:'SUNPHARMA.NS',name:'Sun Pharma'},{sym:'ADANIENT.NS',name:'Adani Ent.'},
+      {sym:'ONGC.NS',name:'ONGC'},{sym:'NTPC.NS',name:'NTPC'},
+      {sym:'POWERGRID.NS',name:'Power Grid'},{sym:'DRREDDY.NS',name:"Dr. Reddy's"},
+    ]},
+    { id: 'etfs', label: 'ETFs & Funds', tickers: [
+      {sym:'NIFTYBEES.NS',name:'Nifty BeES'},{sym:'BANKBEES.NS',name:'Bank Nifty BeES'},
+      {sym:'GOLDBEES.NS',name:'Gold BeES'},{sym:'JUNIORBEES.NS',name:'Junior BeES'},
+      {sym:'ITBEES.NS',name:'IT BeES'},{sym:'INDA',name:'iShares India ETF'},
+      {sym:'INDY',name:'Nifty 50 USD ETF'},
+    ]},
+    { id: 'indices', label: 'Indices', tickers: [
+      {sym:'^NSEI',name:'Nifty 50'},{sym:'^BSESN',name:'BSE Sensex'},
+    ]},
+  ]},
+
+  { id: 'china', label: '🇨🇳 China', sub: [
+    { id: 'stocks', label: 'Stocks (ADR)', tickers: [
+      {sym:'BABA',name:'Alibaba'},{sym:'TCEHY',name:'Tencent'},
+      {sym:'JD',name:'JD.com'},{sym:'PDD',name:'PDD Holdings'},
+      {sym:'BIDU',name:'Baidu'},{sym:'NIO',name:'NIO'},
+      {sym:'XPEV',name:'Xpeng'},{sym:'LI',name:'Li Auto'},
+      {sym:'NTES',name:'NetEase'},{sym:'BILI',name:'Bilibili'},
+      {sym:'IQ',name:'iQIYI'},{sym:'TME',name:'Tencent Music'},
+      {sym:'VIPS',name:'Vipshop'},{sym:'GRAB',name:'Grab Holdings'},
+    ]},
+    { id: 'etfs', label: 'ETFs', tickers: [
+      {sym:'MCHI',name:'iShares China'},{sym:'FXI',name:'Large-Cap China'},
+      {sym:'KWEB',name:'China Internet'},{sym:'CQQQ',name:'China Technology'},
+      {sym:'GXC',name:'SPDR China'},
+    ]},
+    { id: 'indices', label: 'Indices', tickers: [
+      {sym:'^HSI',name:'Hang Seng'},{sym:'000001.SS',name:'Shanghai Comp.'},
+    ]},
+  ]},
+
+  { id: 'japan', label: '🇯🇵 Japan', sub: [
+    { id: 'stocks', label: 'Stocks', tickers: [
+      {sym:'7203.T',name:'Toyota'},{sym:'6758.T',name:'Sony'},
+      {sym:'9984.T',name:'SoftBank'},{sym:'7974.T',name:'Nintendo'},
+      {sym:'6861.T',name:'Keyence'},{sym:'8306.T',name:'MUFG'},
+      {sym:'9432.T',name:'NTT'},{sym:'6902.T',name:'DENSO'},
+      {sym:'4502.T',name:'Takeda Pharma'},{sym:'7267.T',name:'Honda'},
+      {sym:'9983.T',name:'Fast Retailing'},{sym:'6501.T',name:'Hitachi'},
+      {sym:'8035.T',name:'Tokyo Electron'},{sym:'4063.T',name:'Shin-Etsu'},
+    ]},
+    { id: 'etfs', label: 'ETFs', tickers: [
+      {sym:'EWJ',name:'iShares Japan'},{sym:'DXJ',name:'WisdomTree Japan'},
+      {sym:'SCJ',name:'iShares SC Japan'},
+    ]},
+    { id: 'indices', label: 'Indices', tickers: [
+      {sym:'^N225',name:'Nikkei 225'},{sym:'^TOPX',name:'TOPIX'},
+    ]},
+  ]},
+
+  { id: 'europe', label: '🇪🇺 Europe', sub: [
+    { id: 'stocks', label: 'Stocks', tickers: [
+      {sym:'ASML',name:'ASML (NL)'},{sym:'SAP',name:'SAP (DE)'},
+      {sym:'NVO',name:'Novo Nordisk (DK)'},{sym:'SHEL',name:'Shell (UK)'},
+      {sym:'TTE',name:'TotalEnergies (FR)'},{sym:'AZN',name:'AstraZeneca (UK)'},
+      {sym:'UL',name:'Unilever (UK)'},{sym:'LVMUY',name:'LVMH (FR)'},
+      {sym:'NSRGY',name:'Nestlé (CH)'},{sym:'BP',name:'BP (UK)'},
+      {sym:'RIO',name:'Rio Tinto (UK)'},{sym:'HSBC',name:'HSBC (UK)'},
+      {sym:'GSK',name:'GSK (UK)'},{sym:'VOD',name:'Vodafone (UK)'},
+      {sym:'ORAN',name:'Orange (FR)'},{sym:'SIE.DE',name:'Siemens (DE)'},
+    ]},
+    { id: 'etfs', label: 'ETFs', tickers: [
+      {sym:'EZU',name:'Eurozone'},{sym:'EWG',name:'Germany'},
+      {sym:'EWQ',name:'France'},{sym:'EWU',name:'United Kingdom'},
+      {sym:'EWI',name:'Italy'},{sym:'EWP',name:'Spain'},
+      {sym:'FEZ',name:'EURO STOXX 50'},{sym:'VGK',name:'Europe Vanguard'},
+      {sym:'HEDJ',name:'Hedged Europe'},
+    ]},
+    { id: 'indices', label: 'Indices', tickers: [
+      {sym:'^FTSE',name:'FTSE 100 (UK)'},{sym:'^GDAXI',name:'DAX (DE)'},
+      {sym:'^FCHI',name:'CAC 40 (FR)'},{sym:'^STOXX50E',name:'Euro Stoxx 50'},
+      {sym:'^AEX',name:'AEX (NL)'},
+    ]},
+  ]},
+
+  { id: 'global', label: '🌍 Global', sub: [
+    { id: 'metals', label: 'Metals & Energy', tickers: [
+      {sym:'GC=F',name:'Gold Futures'},{sym:'SI=F',name:'Silver Futures'},
+      {sym:'PL=F',name:'Platinum'},{sym:'PA=F',name:'Palladium'},
+      {sym:'HG=F',name:'Copper'},{sym:'CL=F',name:'Crude Oil (WTI)'},
+      {sym:'BZ=F',name:'Brent Crude'},{sym:'NG=F',name:'Natural Gas'},
+      {sym:'ZW=F',name:'Wheat'},{sym:'ZC=F',name:'Corn'},
+      {sym:'GLD',name:'Gold ETF'},{sym:'SLV',name:'Silver ETF'},
+      {sym:'USO',name:'Oil ETF'},{sym:'UNG',name:'Nat Gas ETF'},
+      {sym:'CPER',name:'Copper ETF'},{sym:'PDBC',name:'Commodities ETF'},
+    ]},
+    { id: 'crypto', label: 'Crypto', tickers: [
+      {sym:'BTC-USD',name:'Bitcoin'},{sym:'ETH-USD',name:'Ethereum'},
+      {sym:'BNB-USD',name:'BNB'},{sym:'SOL-USD',name:'Solana'},
+      {sym:'XRP-USD',name:'XRP'},{sym:'ADA-USD',name:'Cardano'},
+      {sym:'AVAX-USD',name:'Avalanche'},{sym:'DOGE-USD',name:'Dogecoin'},
+      {sym:'DOT-USD',name:'Polkadot'},{sym:'MATIC-USD',name:'Polygon'},
+      {sym:'LINK-USD',name:'Chainlink'},{sym:'UNI-USD',name:'Uniswap'},
+      {sym:'SHIB-USD',name:'Shiba Inu'},{sym:'LTC-USD',name:'Litecoin'},
+      {sym:'ATOM-USD',name:'Cosmos'},{sym:'BCH-USD',name:'Bitcoin Cash'},
+    ]},
+    { id: 'forex', label: 'Forex', tickers: [
+      {sym:'EURUSD=X',name:'EUR/USD'},{sym:'GBPUSD=X',name:'GBP/USD'},
+      {sym:'USDJPY=X',name:'USD/JPY'},{sym:'GBPJPY=X',name:'GBP/JPY'},
+      {sym:'USDCNY=X',name:'USD/CNY'},{sym:'USDINR=X',name:'USD/INR'},
+      {sym:'EURJPY=X',name:'EUR/JPY'},{sym:'AUDUSD=X',name:'AUD/USD'},
+      {sym:'USDCHF=X',name:'USD/CHF'},{sym:'NZDUSD=X',name:'NZD/USD'},
+      {sym:'USDCAD=X',name:'USD/CAD'},{sym:'EURGBP=X',name:'EUR/GBP'},
+      {sym:'EURINR=X',name:'EUR/INR'},{sym:'GBPINR=X',name:'GBP/INR'},
+      {sym:'USDBRL=X',name:'USD/BRL'},{sym:'USDMXN=X',name:'USD/MXN'},
+    ]},
+    { id: 'etfs', label: 'Global ETFs', tickers: [
+      {sym:'ACWI',name:'All World'},{sym:'VEU',name:'All World ex-US'},
+      {sym:'VXUS',name:'Total Intl'},{sym:'EEM',name:'Emerging Mkts'},
+      {sym:'VWO',name:'EM Vanguard'},{sym:'INDA',name:'India'},
+      {sym:'EWH',name:'Hong Kong'},{sym:'EWY',name:'South Korea'},
+      {sym:'EWT',name:'Taiwan'},{sym:'EWZ',name:'Brazil'},
+      {sym:'EWA',name:'Australia'},{sym:'EWC',name:'Canada'},
+    ]},
+  ]},
 ];

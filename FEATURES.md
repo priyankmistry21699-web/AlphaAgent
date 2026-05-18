@@ -6,8 +6,10 @@
 
 ## System Overview
 
+> **Updated May 2026** — Phase 7 complete. Tier 1/2/3/4 factors implemented. React frontend live.
+
 ```
-12 Agents | 151 Factors | 10 Data Sources | Probabilistic Output
+9 Agents | 226+ Factors | 12+ Data Sources | Probabilistic Output
 ```
 
 ---

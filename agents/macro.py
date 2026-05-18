@@ -19,6 +19,8 @@ Factors:
 """
 
 import logging
+import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import yfinance as yf
@@ -32,35 +34,55 @@ from config.settings_manager import settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache for cross-asset yfinance series (15 min TTL)
+_CROSS_ASSET_CACHE: dict = {}
+_CROSS_ASSET_TTL = 900   # 15 minutes
 
-def _yf_momentum(ticker: str, lookback: int = 22, period: str = "3mo") -> float:
-    """1-month momentum % for a yfinance ticker."""
+
+def _yf_close_series(ticker: str, period: str = "3mo") -> "pd.Series":
+    """Cached close price series for a yfinance ticker."""
+    import pandas as pd
+    key = f"{ticker}_{period}"
+    entry = _CROSS_ASSET_CACHE.get(key)
+    if entry and _time.time() < entry[1]:
+        return entry[0]
     try:
         df = yf.download(ticker, period=period, interval="1d",
                          auto_adjust=True, progress=False)
         s = df["Close"].squeeze().dropna()
-        if len(s) > lookback:
-            return float((s.iloc[-1] / s.iloc[-lookback - 1] - 1) * 100)
     except Exception:
-        pass
+        s = pd.Series(dtype=float)
+    _CROSS_ASSET_CACHE[key] = (s, _time.time() + _CROSS_ASSET_TTL)
+    return s
+
+
+def _yf_momentum(ticker: str, lookback: int = 22, period: str = "3mo") -> float:
+    s = _yf_close_series(ticker, period)
+    if len(s) > lookback:
+        return float((s.iloc[-1] / s.iloc[-lookback - 1] - 1) * 100)
     return 0.0
 
 
 def _yf_rel_strength(t1: str, t2: str, lookback: int = 22, period: str = "3mo") -> float:
-    """Relative strength: t1 vs t2 return difference over lookback days."""
-    try:
-        import yfinance as yf
-        d1 = yf.download(t1, period=period, interval="1d", auto_adjust=True, progress=False)
-        d2 = yf.download(t2, period=period, interval="1d", auto_adjust=True, progress=False)
-        s1 = d1["Close"].squeeze().dropna()
-        s2 = d2["Close"].squeeze().dropna()
-        if len(s1) > lookback and len(s2) > lookback:
-            r1 = (s1.iloc[-1] / s1.iloc[-lookback - 1] - 1) * 100
-            r2 = (s2.iloc[-1] / s2.iloc[-lookback - 1] - 1) * 100
-            return float(r1 - r2)
-    except Exception:
-        pass
+    s1 = _yf_close_series(t1, period)
+    s2 = _yf_close_series(t2, period)
+    if len(s1) > lookback and len(s2) > lookback:
+        r1 = (s1.iloc[-1] / s1.iloc[-lookback - 1] - 1) * 100
+        r2 = (s2.iloc[-1] / s2.iloc[-lookback - 1] - 1) * 100
+        return float(r1 - r2)
     return 0.0
+
+
+def _prefetch_cross_asset():
+    """Pre-warm cross-asset series in parallel (call once per agent invocation)."""
+    tickers = ["HYG", "LQD", "CPER", "GLD", "BTC-USD", "ACWI", "SPY", "DX-Y.NYB", "IWM"]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {pool.submit(_yf_close_series, t, "3mo"): t for t in tickers}
+        for extra in [("SPY", "1y"), ("^VIX", "1mo"), ("^VIX", "2y")]:
+            futs[pool.submit(_yf_close_series, *extra)] = f"{extra[0]}_{extra[1]}"
+        for f in as_completed(futs):
+            try: f.result(timeout=10)
+            except Exception: pass
 
 
 class MacroAgent(BaseAgent):
@@ -71,6 +93,7 @@ class MacroAgent(BaseAgent):
     name = "macro"
 
     def _run_analysis(self, ticker: str, data: Any, **kwargs) -> AgentResult:
+        _prefetch_cross_asset()   # parallel pre-warm cross-asset series
         macro_data = MacroData()
         snapshot = macro_data.get_macro_snapshot()
 
@@ -156,22 +179,34 @@ class MacroAgent(BaseAgent):
                 if cpi_yoy > cpi_elevated:
                     warnings.append(f"High inflation: CPI {cpi_yoy:.1f}% YoY — Fed tightening risk.")
                     reasoning.append(f"Inflation elevated ({cpi_yoy:.1f}% YoY) — rate hike risk.")
-                elif cpi_yoy < 2.0:
+                elif cpi_yoy < cpi_target:
                     reasoning.append(f"Inflation benign ({cpi_yoy:.1f}% YoY) — Fed has room to cut.")
                 else:
                     reasoning.append(f"Inflation moderate ({cpi_yoy:.1f}% YoY).")
         except Exception as e:
             reasoning.append(f"CPI data unavailable ({e}).")
 
-        # ── 5. VIX ────────────────────────────────────────────────────────
+        # ── 5. VIX — rolling 2-year percentile score ─────────────────────
         if "vix" in snapshot:
             vix = snapshot["vix"]
-            vix_score = max(10.0, min(90.0, 90.0 - (vix - 10) * 2.2))
+            try:
+                vix_hist = _yf_close_series("^VIX", period="2y")
+                if len(vix_hist) >= 30:
+                    pct_rank = float((vix_hist < vix).sum()) / len(vix_hist)
+                    # High VIX percentile → fearful market → bearish score
+                    vix_score = max(10.0, min(90.0, 100.0 * (1.0 - pct_rank)))
+                    vix_label = (f"{vix:.1f} — {pct_rank*100:.0f}th pct of 2Y range"
+                                 f" (dynamic, not fixed threshold)")
+                else:
+                    raise ValueError("insufficient history")
+            except Exception:
+                vix_score = max(10.0, min(90.0, 90.0 - (vix - 10) * 2.2))
+                vix_label = f"VIX: {vix:.1f}"
             factor_scores["vix"] = FactorScore(
                 name="VIX Fear Index",
                 value=vix,
                 score=vix_score,
-                interpretation=f"VIX: {vix:.1f}",
+                interpretation=vix_label,
             )
 
         # ── 6. Credit Spreads (HYG/LQD proxy) ────────────────────────────
@@ -397,6 +432,7 @@ class MacroAgent(BaseAgent):
                 amihud_hist = float(amihud_raw.mean()) * 1e9
                 amihud_rel  = amihud_val / amihud_hist if amihud_hist > 0 else 1.0
                 # Low amihud = liquid (good); high amihud = illiquid (bad)
+                _amihud_thresh = sm.get("amihud_stress_threshold", 2.0)
                 amihud_score = max(10.0, min(90.0, 70.0 - (amihud_rel - 1.0) * 30.0))
                 factor_scores["amihud_illiquidity"] = FactorScore(
                     name="Amihud Illiquidity Ratio (SPY)",
@@ -404,12 +440,12 @@ class MacroAgent(BaseAgent):
                     score=amihud_score,
                     interpretation=(
                         f"Market illiquidity: {amihud_rel:.2f}x avg "
-                        f"({'drying up — flash crash risk' if amihud_rel > 2.0 else 'elevated' if amihud_rel > 1.3 else 'normal liquidity'})"
+                        f"({'drying up — flash crash risk' if amihud_rel > _amihud_thresh else 'elevated' if amihud_rel > 1.3 else 'normal liquidity'})"
                     ),
                 )
-                if amihud_rel > 2.0:
+                if amihud_rel > _amihud_thresh:
                     reasoning.append(f"Amihud illiquidity {amihud_rel:.1f}x above normal — market depth severely impaired.")
-                    warnings.append("ILLIQUIDITY WARNING: Amihud ratio >2x — large trades will move prices significantly.")
+                    warnings.append(f"ILLIQUIDITY WARNING: Amihud ratio >{_amihud_thresh}x — large trades will move prices significantly.")
         except Exception as e:
             reasoning.append(f"Amihud illiquidity unavailable ({e}).")
 
@@ -427,14 +463,15 @@ class MacroAgent(BaseAgent):
                 if len(aligned) >= 60:
                     be_corr = float(aligned.iloc[-60:].corr().iloc[0, 1])
                     # Negative = normal (bonds up when stocks down); both falling = systemic stress
-                    be_score = (30.0 if be_corr > 0.3 else 55.0 if be_corr > -0.2 else 70.0)
+                    _be_thresh = sm.get("bond_equity_stress_corr", 0.3)
+                    be_score = (30.0 if be_corr > _be_thresh else 55.0 if be_corr > -0.2 else 70.0)
                     factor_scores["bond_equity_corr"] = FactorScore(
                         name="Bond-Equity Correlation (TLT/SPY)",
                         value=round(be_corr, 3),
                         score=be_score,
-                        interpretation=f"60d rolling TLT-SPY corr: {be_corr:+.2f} ({'systemic stress' if be_corr > 0.3 else 'flight-to-safety intact' if be_corr < -0.2 else 'neutral'})",
+                        interpretation=f"60d rolling TLT-SPY corr: {be_corr:+.2f} ({'systemic stress' if be_corr > _be_thresh else 'flight-to-safety intact' if be_corr < -0.2 else 'neutral'})",
                     )
-                    if be_corr > 0.3:
+                    if be_corr > _be_thresh:
                         reasoning.append(f"Bond-equity correlation positive ({be_corr:.2f}) — both assets falling: systemic risk event.")
         except Exception as e:
             reasoning.append(f"Bond-equity correlation unavailable ({e}).")
@@ -538,11 +575,347 @@ class MacroAgent(BaseAgent):
                         f"({'normal — repo market calm' if abs(sofr_spread) < 0.10 else 'stressed — funding squeeze' if abs(sofr_spread) > 0.25 else 'slight tension'})"
                     ),
                 )
-                if abs(sofr_spread) > 0.50:
+                _sofr_thresh = sm.get("sofr_critical_spread", 0.50)
+                if abs(sofr_spread) > _sofr_thresh:
                     warnings.append(f"REPO STRESS: SOFR spread to Fed Funds {sofr_spread:+.4f}% — funding market stress detected.")
                     reasoning.append(f"Repo market stress: SOFR-FF spread {sofr_spread:+.4f}% — interbank funding tightening.")
         except Exception as e:
             reasoning.append(f"SOFR spread unavailable ({e}).")
+
+        # ── 22. Fed Rate Change Direction ─────────────────────────────────
+        try:
+            _ffr_series = macro_data.get_series("FEDFUNDS", years_back=1)
+            if _ffr_series is not None and len(_ffr_series) >= 4:
+                _ffr_now_r = float(_ffr_series.iloc[-1].iloc[0])
+                _ffr_3mo_r = float(_ffr_series.iloc[-4].iloc[0])
+                _ffr_delta = _ffr_now_r - _ffr_3mo_r
+                if _ffr_delta > 0.24:
+                    _rcd_label = "HIKING"
+                    _rcd_score = 25.0
+                elif _ffr_delta < -0.24:
+                    _rcd_label = "CUTTING"
+                    _rcd_score = 75.0
+                else:
+                    _rcd_label = "ON HOLD"
+                    _rcd_score = 55.0
+                factor_scores["rate_change_direction"] = FactorScore(
+                    name="Fed Rate Change Direction",
+                    value=round(_ffr_delta, 2),
+                    score=_rcd_score,
+                    interpretation=f"Fed: {_rcd_label} | FFR Δ3M: {_ffr_delta:+.2f}% — {'tightening cycle (bearish)' if _rcd_label == 'HIKING' else 'easing cycle (bullish)' if _rcd_label == 'CUTTING' else 'on hold — data dependent'}",
+                )
+                if _rcd_label == "CUTTING":
+                    reasoning.append(f"Fed cutting rates ({_ffr_delta:+.2f}% in 3M) — accommodative pivot, equities positive.")
+                elif _rcd_label == "HIKING":
+                    reasoning.append(f"Fed hiking rates ({_ffr_delta:+.2f}% in 3M) — tightening cycle headwind.")
+        except Exception:
+            pass
+
+        # ── 23. VIX 5-Day Change ──────────────────────────────────────────
+        try:
+            _vix_1m = _yf_close_series("^VIX", period="1mo")
+            if len(_vix_1m) >= 6:
+                _vix_now_v = float(_vix_1m.iloc[-1])
+                _vix_5d_v  = float(_vix_1m.iloc[-6])
+                _vix_delta = _vix_now_v - _vix_5d_v
+                _v5d_score = max(10.0, min(90.0, 50.0 - _vix_delta * 4.0))
+                factor_scores["vix_5d_change"] = FactorScore(
+                    name="VIX 5-Day Change",
+                    value=round(_vix_delta, 2),
+                    score=_v5d_score,
+                    interpretation=f"VIX Δ5d: {_vix_delta:+.1f} ({_vix_now_v:.1f} now) — {'fear spiking' if _vix_delta > 3 else 'fear dissipating' if _vix_delta < -3 else 'stable volatility'}",
+                )
+                if _vix_delta > 5:
+                    reasoning.append(f"VIX spiked +{_vix_delta:.1f} in 5 days — volatility regime shift warning.")
+        except Exception:
+            pass
+
+        # ── 24. SPY vs SMA(200) — Bull/Bear Market Regime ─────────────────
+        try:
+            _spy_1y = _yf_close_series("SPY", period="1y")
+            if len(_spy_1y) >= 200:
+                _spy_now_p  = float(_spy_1y.iloc[-1])
+                _spy_sma200 = float(_spy_1y.iloc[-200:].mean())
+                _pct_above  = (_spy_now_p / _spy_sma200 - 1) * 100
+                _sma200_score = (80.0 if _pct_above > 5 else 60.0 if _pct_above > 0 else 35.0 if _pct_above > -5 else 15.0)
+                factor_scores["spy_sma200"] = FactorScore(
+                    name="SPY vs SMA(200)",
+                    value=round(_pct_above, 2),
+                    score=_sma200_score,
+                    interpretation=f"SPY {_pct_above:+.1f}% {'above' if _pct_above > 0 else 'below'} 200-day SMA — {'bull market regime' if _pct_above > 3 else 'bear market' if _pct_above < -5 else 'near trend support'}",
+                )
+                if _pct_above < -5:
+                    reasoning.append(f"SPY {_pct_above:.1f}% below 200-SMA — bear market regime confirmed.")
+                    warnings.append(f"BEAR MARKET: SPY {_pct_above:.1f}% below 200-day moving average.")
+                elif _pct_above > 5:
+                    reasoning.append(f"SPY {_pct_above:+.1f}% above 200-SMA — bull market regime intact.")
+        except Exception:
+            pass
+
+        # ── 25. Large vs Small Cap Rotation (SPY/IWM) ─────────────────────
+        try:
+            _lsc_rs = _yf_rel_strength("SPY", "IWM", lookback=22)
+            _lsc_score = max(10.0, min(90.0, 50.0 - _lsc_rs * 2.0))
+            factor_scores["large_vs_small_cap"] = FactorScore(
+                name="Large vs Small Cap (SPY/IWM)",
+                value=round(_lsc_rs, 2),
+                score=_lsc_score,
+                interpretation=f"SPY vs IWM RS: {_lsc_rs:+.1f}% — {'large-cap dominance (late cycle / defensive)' if _lsc_rs > 4 else 'small-cap leading (early cycle / risk-on)' if _lsc_rs < -4 else 'neutral — no size rotation signal'}",
+            )
+            if _lsc_rs < -5:
+                reasoning.append(f"Small caps outperforming by {abs(_lsc_rs):.1f}% — risk-on early cycle signal.")
+            elif _lsc_rs > 5:
+                reasoning.append(f"Large caps dominating by {_lsc_rs:.1f}% — defensive rotation, late cycle signal.")
+        except Exception:
+            pass
+
+        # ── 26. Sector Relative Strength (Ticker's Sector ETF vs SPY) ─────
+        try:
+            _sector_etf_map_m = {
+                "Technology": "XLK", "Communication Services": "XLC",
+                "Consumer Discretionary": "XLY", "Consumer Staples": "XLP",
+                "Health Care": "XLV", "Industrials": "XLI", "Materials": "XLB",
+                "Energy": "XLE", "Financials": "XLF", "Real Estate": "XLRE", "Utilities": "XLU",
+            }
+            _tkr_info_m = {}
+            try:
+                _tkr_info_m = data.get_info() or {}
+            except Exception:
+                import yfinance as _yf_m
+                _tkr_info_m = _yf_m.Ticker(ticker).info or {}
+            _sector_m = _tkr_info_m.get("sector", "") if isinstance(_tkr_info_m, dict) else ""
+            _sec_etf_m = _sector_etf_map_m.get(_sector_m)
+            if _sec_etf_m:
+                _sec_rs_m = _yf_rel_strength(_sec_etf_m, "SPY", lookback=22)
+                _sec_rs_score = max(10.0, min(90.0, 50.0 + _sec_rs_m * 3.0))
+                factor_scores["sector_rs"] = FactorScore(
+                    name=f"Sector RS ({_sector_m})",
+                    value=round(_sec_rs_m, 2),
+                    score=_sec_rs_score,
+                    interpretation=f"{_sec_etf_m} vs SPY RS: {_sec_rs_m:+.1f}% — {'sector leading (momentum tailwind)' if _sec_rs_m > 3 else 'sector lagging (rotation headwind)' if _sec_rs_m < -3 else 'neutral sector rotation'}",
+                )
+                if _sec_rs_m > 5:
+                    reasoning.append(f"{_sector_m} sector outperforming SPY by {_sec_rs_m:.1f}% — sector tailwind for {ticker}.")
+                elif _sec_rs_m < -5:
+                    reasoning.append(f"{_sector_m} sector underperforming SPY by {abs(_sec_rs_m):.1f}% — sector rotation headwind.")
+        except Exception:
+            pass
+
+        # ── 27. Contagion Correlation Spike (Cross-Asset Co-Movement) ─────
+        try:
+            import pandas as _pd_cc
+            _cc_series = {}
+            for _sym_cc in ["SPY", "TLT", "GLD", "HYG"]:
+                _s_cc = _yf_close_series(_sym_cc, "3mo")
+                if len(_s_cc) >= 30:
+                    _cc_series[_sym_cc] = _s_cc.pct_change().dropna()
+            if len(_cc_series) >= 3:
+                _cc_df = _pd_cc.DataFrame(_cc_series).dropna()
+                if len(_cc_df) >= 30:
+                    _n_cc = len(_cc_series)
+                    _corr_rec  = _cc_df.iloc[-20:].corr()
+                    _corr_hist = _cc_df.corr()
+                    _avg_rec  = float((_corr_rec.sum().sum()  - _n_cc) / (_n_cc * (_n_cc - 1)))
+                    _avg_hist = float((_corr_hist.sum().sum() - _n_cc) / (_n_cc * (_n_cc - 1)))
+                    _corr_spike = _avg_rec - _avg_hist
+                    _contagion_score = max(10.0, min(90.0, 70.0 - _corr_spike * 100))
+                    factor_scores["contagion_correlation"] = FactorScore(
+                        name="Contagion Correlation Spike",
+                        value=round(_corr_spike, 3),
+                        score=_contagion_score,
+                        interpretation=f"Cross-asset corr (20d): {_avg_rec:.2f} vs hist {_avg_hist:.2f} → spike {_corr_spike:+.2f} — {'CRISIS CONTAGION — diversification failing' if _corr_spike > 0.15 else 'normal diversification' if _corr_spike < 0 else 'slightly elevated co-movement'}",
+                    )
+                    if _corr_spike > 0.20:
+                        warnings.append(f"CONTAGION ALERT: Cross-asset correlation +{_corr_spike:.2f} above normal — crisis-like co-movement.")
+                        reasoning.append(f"Cross-asset correlations spiking ({_corr_spike:+.2f}) — diversification failing, contagion risk.")
+        except Exception:
+            pass
+
+        # ── 28. Real Interest Rate (DGS10 − T10YIE) ──────────────────────
+        try:
+            _tnx_s = macro_data.get_series("DGS10", years_back=1)
+            _tie_s = macro_data.get_series("T10YIE", years_back=1)
+            if (_tnx_s is not None and len(_tnx_s) >= 1 and
+                    _tie_s is not None and len(_tie_s) >= 1):
+                _nominal_r  = float(_tnx_s.iloc[-1].iloc[0])
+                _breakeven  = float(_tie_s.iloc[-1].iloc[0])
+                _real_rate  = _nominal_r - _breakeven
+                _rr_m_score = (70.0 if _real_rate > 1.5 else 55.0 if _real_rate > 0.5
+                               else 45.0 if _real_rate > 0 else 30.0 if _real_rate > -1.0 else 15.0)
+                factor_scores["real_interest_rate"] = FactorScore(
+                    name="Real Interest Rate (10Y)",
+                    value=round(_real_rate, 3),
+                    score=_rr_m_score,
+                    interpretation=f"Real rate: {_real_rate:+.2f}% (Nominal {_nominal_r:.2f}% − BE {_breakeven:.2f}%) — {'positive real yield — equity multiple compression risk' if _real_rate > 1.0 else 'near-zero real rate' if abs(_real_rate) < 0.5 else 'negative real rate — financial repression, equity/gold supportive'}",
+                )
+                if _real_rate < -1.0:
+                    reasoning.append(f"Deeply negative real rates ({_real_rate:.2f}%) — financial repression, equity-positive.")
+                elif _real_rate > 2.0:
+                    reasoning.append(f"Real rates elevated ({_real_rate:.2f}%) — equity multiple compression risk, rate burden rising.")
+        except Exception:
+            pass
+
+        # ── New: PCE Inflation (FRED PCEPI — Fed's Preferred Gauge) ─────────
+        try:
+            _pce = macro_data.get_series("PCEPI", years_back=2)
+            if _pce is not None and len(_pce) >= 13:
+                _pce_now  = float(_pce.iloc[-1].iloc[0])
+                _pce_yago = float(_pce.iloc[-13].iloc[0])
+                _pce_yoy  = (_pce_now / _pce_yago - 1) * 100
+                _pce_3m   = float(_pce.iloc[-4].iloc[0]) if len(_pce) >= 4 else _pce_yago
+                _pce_3m_ann = ((_pce_now / _pce_3m) ** 4 - 1) * 100
+                _pce_tgt   = sm.get("pce_target", 2.0)
+                _pce_near  = sm.get("pce_near_target", 2.5)
+                _pce_elev  = sm.get("pce_elevated", 3.5)
+                _pce_score = (75.0 if _pce_yoy < _pce_tgt else 55.0 if _pce_yoy < _pce_near
+                              else 35.0 if _pce_yoy < _pce_elev else 15.0)
+                factor_scores["pce_inflation"] = FactorScore(
+                    name="PCE Inflation (YoY)",
+                    value=round(_pce_yoy, 2),
+                    score=_pce_score,
+                    interpretation=(
+                        f"PCE YoY: {_pce_yoy:.1f}% | 3M ann: {_pce_3m_ann:.1f}% — "
+                        f"{'at/below Fed 2% target' if _pce_yoy < 2.0 else 'near target' if _pce_yoy < 2.5 else 'above target — tightening pressure' if _pce_yoy < 3.5 else 'elevated — Fed hawkish bias'}"
+                    ),
+                )
+                if _pce_yoy > _pce_elev:
+                    warnings.append(f"PCE inflation {_pce_yoy:.1f}% — well above Fed {_pce_tgt:.1f}% target.")
+                    reasoning.append(f"PCE inflation elevated ({_pce_yoy:.1f}% YoY, 3M ann {_pce_3m_ann:.1f}%) — Fed's preferred measure signals persistent price pressure.")
+                elif _pce_yoy < _pce_tgt:
+                    reasoning.append(f"PCE inflation benign ({_pce_yoy:.1f}% YoY) — below Fed target, rate cuts remain possible.")
+                else:
+                    reasoning.append(f"PCE inflation near Fed target ({_pce_yoy:.1f}% YoY).")
+        except Exception:
+            pass
+
+        # ── New: Retail Sales MoM (FRED RSXFS) ──────────────────────────
+        try:
+            _rs_series = macro_data.get_series("RSXFS", years_back=1)
+            if _rs_series is not None and len(_rs_series) >= 2:
+                _rs_now  = float(_rs_series.iloc[-1].iloc[0])
+                _rs_prev = float(_rs_series.iloc[-2].iloc[0])
+                _rs_mom  = (_rs_now / _rs_prev - 1) * 100
+                _rs_score = (75.0 if _rs_mom > 1.0 else 60.0 if _rs_mom > 0 else 40.0 if _rs_mom > -1.0 else 25.0)
+                factor_scores["retail_sales"] = FactorScore(
+                    name="Retail Sales MoM (ex-Auto)",
+                    value=round(_rs_mom, 2),
+                    score=_rs_score,
+                    interpretation=(
+                        f"Retail sales MoM: {_rs_mom:+.2f}% (${_rs_now / 1e3:.0f}B) — "
+                        f"{'strong consumer spending' if _rs_mom > 1.0 else 'positive' if _rs_mom > 0 else 'slight contraction' if _rs_mom > -1.0 else 'consumer weakness'}"
+                    ),
+                )
+                if _rs_mom < -1.5:
+                    reasoning.append(f"Retail sales contracting ({_rs_mom:+.1f}% MoM) — consumer weakness signal.")
+                elif _rs_mom > 1.5:
+                    reasoning.append(f"Retail sales strong ({_rs_mom:+.1f}% MoM) — consumer resilience confirmed.")
+        except Exception:
+            pass
+
+        # ── New: Leading Economic Index (FRED USSLIND) ───────────────────
+        try:
+            _lei_s = macro_data.get_series("USSLIND", years_back=1)
+            if _lei_s is not None and len(_lei_s) >= 4:
+                _lei_now   = float(_lei_s.iloc[-1].iloc[0])
+                _lei_3m    = float(_lei_s.iloc[-4].iloc[0])
+                _lei_trend = _lei_now - _lei_3m
+                _lei_score = (72.0 if _lei_trend > 0.5 else 55.0 if _lei_trend > 0 else 40.0 if _lei_trend > -0.5 else 22.0)
+                factor_scores["leading_index"] = FactorScore(
+                    name="Leading Economic Index (LEI)",
+                    value=round(_lei_trend, 2),
+                    score=_lei_score,
+                    interpretation=(
+                        f"LEI: {_lei_now:.1f} | 3M change: {_lei_trend:+.2f} — "
+                        f"{'expansion accelerating' if _lei_trend > 0.5 else 'mild expansion' if _lei_trend > 0 else 'slowdown signal' if _lei_trend > -0.5 else 'recession signal'}"
+                    ),
+                )
+                if _lei_trend < -1.0:
+                    warnings.append(f"LEI declining {_lei_trend:.2f} — leading indicator points to economic contraction.")
+                    reasoning.append(f"Leading Economic Index falling ({_lei_trend:+.2f}) — forward-looking recession indicator.")
+        except Exception:
+            pass
+
+        # ── New: HY Credit Spread (FRED BAMLH0A0HYM2) ───────────────────
+        try:
+            _hy_s = macro_data.get_series("BAMLH0A0HYM2", years_back=1)
+            if _hy_s is not None and len(_hy_s) >= 2:
+                _hy_now  = float(_hy_s.iloc[-1].iloc[0])
+                _hy_prev = float(_hy_s.iloc[-5].iloc[0]) if len(_hy_s) >= 5 else _hy_now
+                _hy_chg  = _hy_now - _hy_prev
+                _hy_score = (72.0 if _hy_now < 3.0 else 55.0 if _hy_now < 5.0 else 35.0 if _hy_now < 7.0 else 18.0)
+                factor_scores["hy_credit_spread"] = FactorScore(
+                    name="HY Credit Spread (OAS)",
+                    value=round(_hy_now, 2),
+                    score=_hy_score,
+                    interpretation=(
+                        f"HY OAS: {_hy_now:.2f}% | 1W chg: {_hy_chg:+.2f}% — "
+                        f"{'tight — risk-on, credit conditions easy' if _hy_now < 3.0 else 'normal' if _hy_now < 5.0 else 'wide — credit stress, risk-off' if _hy_now < 7.0 else 'DISTRESS — near-crisis spreads'}"
+                    ),
+                )
+                if _hy_now > 7.0:
+                    warnings.append(f"HY spreads at {_hy_now:.1f}% — near-crisis credit conditions.")
+                    reasoning.append(f"High-yield credit spreads {_hy_now:.1f}% (OAS) — distress-level, systemic risk signal.")
+                elif _hy_chg > 1.0:
+                    reasoning.append(f"HY spreads widening {_hy_chg:+.1f}% in 1W — risk-off credit signal.")
+        except Exception:
+            pass
+
+        # ── New: NFIB Small Business Optimism (FRED NFCI / BOPTIMISM) ───
+        try:
+            _nfib_s = macro_data.get_series("NFCI", years_back=1)
+            if _nfib_s is None or len(_nfib_s) < 2:
+                _nfib_s = macro_data.get_series("DRTSCILM", years_back=1)
+            if _nfib_s is not None and len(_nfib_s) >= 4:
+                _nfib_now  = float(_nfib_s.iloc[-1].iloc[0])
+                _nfib_3m   = float(_nfib_s.iloc[-4].iloc[0])
+                _nfib_trend = _nfib_now - _nfib_3m
+                _nfib_neutral = 0.0
+                _nfib_score = (70.0 if _nfib_now < _nfib_neutral and _nfib_trend < 0 else
+                               55.0 if _nfib_now < _nfib_neutral else
+                               40.0 if _nfib_trend > 0 else 50.0)
+                factor_scores["nfib_conditions"] = FactorScore(
+                    name="Financial Conditions Index (NFCI)",
+                    value=round(_nfib_now, 3),
+                    score=_nfib_score,
+                    interpretation=(
+                        f"NFCI: {_nfib_now:.3f} | 3M trend: {_nfib_trend:+.3f} — "
+                        f"{'tight financial conditions — tightening bias' if _nfib_now > 0 else 'easy conditions — accommodative'} "
+                        f"({'tightening' if _nfib_trend > 0 else 'easing'})"
+                    ),
+                )
+                if _nfib_now > 0.5:
+                    warnings.append(f"NFCI at {_nfib_now:.2f} — financial conditions tightening significantly.")
+                    reasoning.append(f"Financial conditions index elevated ({_nfib_now:.2f}) — credit tightening, growth headwind.")
+        except Exception:
+            pass
+
+        # ── New: Equity Risk Premium (E/P − Real Rate) ───────────────────
+        try:
+            import yfinance as _yf_erp
+            _sp_info = _yf_erp.Ticker("^GSPC").info or {}
+            _fwd_pe  = _sp_info.get("forwardPE", None) or _sp_info.get("trailingPE", None)
+            _tnx_erp = macro_data.get_series("DGS10", years_back=1)
+            _tie_erp = macro_data.get_series("T10YIE", years_back=1)
+            if _fwd_pe and _tnx_erp is not None and _tie_erp is not None:
+                _ep_ratio   = (1.0 / float(_fwd_pe)) * 100
+                _real_r_erp = float(_tnx_erp.iloc[-1].iloc[0]) - float(_tie_erp.iloc[-1].iloc[0])
+                _erp        = _ep_ratio - _real_r_erp
+                _erp_score  = (75.0 if _erp > 4.0 else 60.0 if _erp > 2.0 else 45.0 if _erp > 0 else 25.0)
+                factor_scores["equity_risk_premium"] = FactorScore(
+                    name="Equity Risk Premium (E/P − Real Rate)",
+                    value=round(_erp, 2),
+                    score=_erp_score,
+                    interpretation=(
+                        f"ERP: {_erp:+.2f}% (E/P {_ep_ratio:.1f}% − real rate {_real_r_erp:.2f}%) — "
+                        f"{'attractive equity valuation' if _erp > 4.0 else 'fair' if _erp > 2.0 else 'compressed premium' if _erp > 0 else 'equities expensive vs bonds'}"
+                    ),
+                )
+                if _erp < 0:
+                    reasoning.append(f"ERP negative ({_erp:.2f}%) — bonds offer better risk-adjusted return than equities.")
+                elif _erp > 4.0:
+                    reasoning.append(f"ERP at {_erp:.2f}% — equities attractively valued vs real bonds.")
+        except Exception:
+            pass
 
         # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
         try:

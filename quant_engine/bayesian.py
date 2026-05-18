@@ -1,14 +1,16 @@
 """
 AlphaAgent — Bayesian Fusion Engine
 
-Instead of simply averaging probabilities, this module uses Bayesian 
-Updating to fuse probabilities from multiple independent agents, 
+Instead of simply averaging probabilities, this module uses Bayesian
+Updating to fuse probabilities from multiple independent agents,
 penalizing highly correlated agents to avoid confirmation bias.
+Tracks convergence so each agent's contribution is visible.
 """
 
 import numpy as np
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -19,69 +21,79 @@ class BayesianResult:
     entropy: float
 
 
+@dataclass
+class CouncilStep:
+    agent: str
+    prob_before: float
+    prob_after: float
+    agent_prob: float
+    weight: float        # effective weight after corr + confidence penalties
+
+
 class BayesianFusion:
     """
     Fuses multiple probability estimates into a single posterior probability.
+    Tracks each agent's contribution as a "council convergence" path.
     """
-    
+
     def __init__(self, prior: float = 0.5):
-        """
-        Args:
-            prior: The initial belief before any agent speaks (0.5 = totally neutral).
-        """
-        # Constrain prior between 0.01 and 0.99 to prevent log(0)
         self.prior = min(0.99, max(0.01, prior))
-        
-        # We store beliefs in log-odds form: log(p / (1-p))
         self.log_odds_posterior = np.log(self.prior / (1.0 - self.prior))
-        
-    def update(self, agent_prob: float, correlation: float = 0.0, confidence: float = 1.0) -> None:
-        """
-        Updates the internal posterior probability using a new piece of evidence.
-        
-        Args:
-            agent_prob: The probability returned by the agent (0.0 to 1.0)
-            correlation: How correlated this agent is to previous evidence (0.0 = independent, 1.0 = same info)
-            confidence: How confident the agent is in this specific prediction (0.0 to 1.0)
-        """
+        self.council: List[CouncilStep] = []
+
+    def update(self, agent_prob: float, correlation: float = 0.0,
+               confidence: float = 1.0, agent_name: str = "") -> None:
         if agent_prob is None or np.isnan(agent_prob):
             return
-            
+
+        prob_before = self.posterior
         agent_prob = min(0.99, max(0.01, agent_prob))
-        
-        # Calculate the "Bayes Factor" (the evidence)
+
         evidence_log_odds = np.log(agent_prob / (1.0 - agent_prob))
-        
-        # If confidence is low, we shrink the evidence towards 0 (neutral)
         evidence_log_odds *= confidence
-        
-        # If this agent uses the same data as another agent (high correlation),
-        # we penalize the evidence so we don't double-count it.
-        # e.g., if correlation = 0.8, we only add 20% of the evidence's weight.
         penalty_factor = 1.0 - correlation
-        
-        # Add the weighted evidence to our posterior
+        effective_weight = confidence * penalty_factor
+
         self.log_odds_posterior += (evidence_log_odds * penalty_factor)
-        
+
+        self.council.append(CouncilStep(
+            agent=agent_name,
+            prob_before=prob_before,
+            prob_after=self.posterior,
+            agent_prob=agent_prob,
+            weight=effective_weight,
+        ))
+
     @property
     def posterior(self) -> float:
-        """
-        Converts the internal log-odds back into a standard probability (0 to 1).
-        """
-        # Inverse log-odds (sigmoid function)
         p = 1.0 / (1.0 + np.exp(-self.log_odds_posterior))
         return float(p)
-        
+
     @property
     def entropy(self) -> float:
-        """
-        Calculates Shannon Entropy (uncertainty). 
-        0.0 = Absolute certainty, 1.0 = Total confusion.
-        """
         p = self.posterior
         if p <= 0 or p >= 1:
             return 0.0
-        
-        # Binary Cross Entropy
-        ent = - (p * np.log2(p) + (1 - p) * np.log2(1 - p))
+        ent = -(p * np.log2(p) + (1 - p) * np.log2(1 - p))
         return float(ent)
+
+    def council_summary(self) -> List[dict]:
+        """Returns council convergence steps for API serialization."""
+        return [
+            {
+                "agent": s.agent,
+                "agent_prob": round(s.agent_prob, 4),
+                "prob_before": round(s.prob_before, 4),
+                "prob_after": round(s.prob_after, 4),
+                "delta": round(s.prob_after - s.prob_before, 4),
+                "weight": round(s.weight, 3),
+            }
+            for s in self.council
+        ]
+
+    def agreement_score(self) -> float:
+        """0 = all agents in perfect agreement, 1 = maximum disagreement."""
+        if len(self.council) < 2:
+            return 0.0
+        probs = [s.agent_prob for s in self.council]
+        return float(np.std(probs) * 2)  # normalized to ~0-1 range

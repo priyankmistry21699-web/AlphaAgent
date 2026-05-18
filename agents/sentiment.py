@@ -263,7 +263,9 @@ REASON: [A strict 2-sentence explanation focusing on behavioral economics and se
             news = yf.Ticker(ticker).news or []
             recent_count = len([n for n in news if n.get("providerPublishTime", 0) > (__import__("time").time() - 86400 * 3)])
             # High news volume = social interest spike
-            social_score = min(80.0, 40.0 + recent_count * 4)
+            _ss_base = settings.get("sentiment.social_score_base", 40.0)
+            _ss_mult = settings.get("sentiment.social_score_mult", 4.0)
+            social_score = min(80.0, _ss_base + recent_count * _ss_mult)
             factor_scores["social_momentum"] = FactorScore(
                 name="News / Social Momentum",
                 value=float(recent_count),
@@ -458,6 +460,354 @@ REASON: [A strict 2-sentence explanation focusing on behavioral economics and se
                     score=md_score,
                     interpretation=f"Consumer credit 3M change: {cc_chg:+.2f}% ({'leverage expanding' if cc_chg > 2 else 'deleveraging' if cc_chg < -1 else 'stable'})",
                 )
+        except Exception:
+            pass
+
+        # ── New: Short Interest Change (MoM) ─────────────────────────────
+        try:
+            _si_info = yf.Ticker(ticker).info
+            _shares_short       = _si_info.get("sharesShort")
+            _shares_short_prior = _si_info.get("sharesShortPriorMonth")
+            if _shares_short and _shares_short_prior and float(_shares_short_prior) > 0:
+                _si_chg = (float(_shares_short) - float(_shares_short_prior)) / float(_shares_short_prior) * 100
+                _sic_score = (75.0 if _si_chg < -10 else 55.0 if _si_chg < 0 else 40.0 if _si_chg < 10 else 20.0)
+                factor_scores["short_interest_change"] = FactorScore(
+                    name="Short Interest Change (MoM)",
+                    value=round(_si_chg, 2),
+                    score=_sic_score,
+                    interpretation=f"Short interest MoM: {_si_chg:+.1f}% ({'shorts covering — bullish' if _si_chg < -10 else 'short interest rising — bearish pressure' if _si_chg > 10 else 'stable'})",
+                )
+                if _si_chg > 20:
+                    reasoning.append(f"Short interest surging {_si_chg:+.0f}% MoM — bearish conviction building.")
+                elif _si_chg < -15:
+                    reasoning.append(f"Shorts covering hard ({_si_chg:.0f}% MoM) — potential short squeeze catalyst.")
+        except Exception:
+            pass
+
+        # ── New: Analyst Revision Direction ──────────────────────────────
+        try:
+            _tkr_ard   = yf.Ticker(ticker)
+            _summ_ard  = _tkr_ard.recommendations_summary
+            if _summ_ard is not None and not _summ_ard.empty and len(_summ_ard) >= 2:
+                def _bull_frac(row):
+                    _t = (float(row.get("strongBuy", 0)) + float(row.get("buy", 0))
+                          + float(row.get("hold", 0)) + float(row.get("sell", 0))
+                          + float(row.get("strongSell", 0)))
+                    return (float(row.get("strongBuy", 0)) + float(row.get("buy", 0))) / _t if _t > 0 else 0.5
+                _bp_now  = _bull_frac(_summ_ard.iloc[0])
+                _bp_prev = _bull_frac(_summ_ard.iloc[1])
+                _ard_delta = _bp_now - _bp_prev
+                _ard_score = (75.0 if _ard_delta > 0.05 else 55.0 if _ard_delta > 0 else 40.0 if _ard_delta > -0.05 else 20.0)
+                factor_scores["analyst_revision_direction"] = FactorScore(
+                    name="Analyst Revision Direction",
+                    value=round(_ard_delta * 100, 1),
+                    score=_ard_score,
+                    interpretation=f"Analyst bullish% change: {_ard_delta*100:+.1f}pp ({'upgrade cycle' if _ard_delta > 0.05 else 'downgrade cycle' if _ard_delta < -0.05 else 'stable consensus'})",
+                )
+                if _ard_delta < -0.10:
+                    reasoning.append(f"Analyst consensus deteriorating ({_ard_delta*100:.0f}pp) — downgrade cycle.")
+                elif _ard_delta > 0.10:
+                    reasoning.append(f"Analyst upgrades accelerating ({_ard_delta*100:+.0f}pp) — positive revision cycle.")
+        except Exception:
+            pass
+
+        # ── New: Sentiment Momentum (3-Day News Velocity) ─────────────────
+        try:
+            import time as _t_sm
+            _news_sm  = yf.Ticker(ticker).news or []
+            _now_sm   = _t_sm.time()
+            _count_r  = sum(1 for n in _news_sm if n.get("providerPublishTime", 0) > _now_sm - 3 * 86400)
+            _count_p  = sum(1 for n in _news_sm if _now_sm - 6 * 86400 < n.get("providerPublishTime", 0) <= _now_sm - 3 * 86400)
+            _sm_delta = _count_r - _count_p
+            _sm_score = (70.0 if _sm_delta > 2 else 55.0 if _sm_delta > 0 else 45.0 if _sm_delta == 0 else 30.0)
+            factor_scores["sentiment_momentum"] = FactorScore(
+                name="Sentiment Momentum (3-Day Trend)",
+                value=float(_sm_delta),
+                score=_sm_score,
+                interpretation=f"News velocity: {_count_r} articles (0–3d) vs {_count_p} (3–6d) → Δ{_sm_delta:+d} ({'accelerating' if _sm_delta > 2 else 'decelerating' if _sm_delta < -2 else 'stable'})",
+            )
+            if _sm_delta < -3:
+                reasoning.append(f"News flow decelerating ({_sm_delta}) — sentiment fading.")
+            elif _sm_delta > 3:
+                reasoning.append(f"News velocity surging ({_sm_delta:+d}) — catalysts emerging.")
+        except Exception:
+            pass
+
+        # ── New: Source Credibility Weight ────────────────────────────────
+        try:
+            _CREDIBILITY_TIERS = {
+                "wsj": 1.0, "bloomberg": 1.0, "reuters": 1.0, "ft.com": 1.0,
+                "barrons": 0.95, "cnbc": 0.85, "marketwatch": 0.80,
+                "seekingalpha": 0.70, "motleyfool": 0.65, "forbes": 0.65,
+                "businessinsider": 0.60, "benzinga": 0.55, "thestreet": 0.55,
+                "zacks": 0.60, "investopedia": 0.50,
+            }
+            _news_sc = yf.Ticker(ticker).news or []
+            if _news_sc:
+                _cred_scores = []
+                for _art in _news_sc[:20]:
+                    _pub = (_art.get("publisher", "") or "").lower()
+                    _cred = 0.5
+                    for _domain, _w in _CREDIBILITY_TIERS.items():
+                        if _domain in _pub:
+                            _cred = _w
+                            break
+                    _cred_scores.append(_cred)
+                _avg_cred = sum(_cred_scores) / len(_cred_scores)
+                _sc_score = max(20.0, min(80.0, _avg_cred * 100))
+                factor_scores["source_credibility"] = FactorScore(
+                    name="Source Credibility Weight",
+                    value=round(_avg_cred, 3),
+                    score=_sc_score,
+                    interpretation=f"Avg source credibility: {_avg_cred:.2f}/1.0 ({len(_news_sc[:20])} articles) — {'premium financial media' if _avg_cred > 0.75 else 'mixed credibility' if _avg_cred > 0.5 else 'low-tier sources'}",
+                )
+        except Exception:
+            pass
+
+        # ── New: Headline vs Body Alignment (LLM Dual-Pass) ──────────────
+        try:
+            if _GENAI_AVAILABLE and os.getenv("GEMINI_API_KEY") and retrieved_articles:
+                import google.genai as _genai_hb
+                _hb_client = _genai_hb.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                _hb_context = "\n".join(retrieved_articles[:3])
+                _hb_prompt = (
+                    f"You analyze financial news for {ticker}. Given this content:\n\n"
+                    f"{_hb_context}\n\n"
+                    "Rate on 0-100 where 0=bearish, 100=bullish. Reply ONLY in this format:\n"
+                    "HEADLINE_SCORE: [number]\n"
+                    "BODY_SCORE: [number]\n"
+                    "ALIGNMENT: [ALIGNED or DIVERGED]\n"
+                )
+                _hb_response = _hb_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=_hb_prompt,
+                    config=_genai_hb.types.GenerateContentConfig(temperature=0.0),
+                )
+                _hb_lines = {}
+                for _hb_line in _hb_response.text.split("\n"):
+                    if ":" in _hb_line:
+                        _hk, _hv = _hb_line.split(":", 1)
+                        _hb_lines[_hk.strip()] = _hv.strip()
+                _hl_score   = float(_hb_lines.get("HEADLINE_SCORE", "50"))
+                _body_score = float(_hb_lines.get("BODY_SCORE", "50"))
+                _alignment  = _hb_lines.get("ALIGNMENT", "ALIGNED").upper()
+                _hba_score  = (
+                    70.0 if _alignment == "ALIGNED" and _body_score > 50
+                    else 50.0 if _alignment == "ALIGNED"
+                    else 30.0 if _body_score < _hl_score - 20
+                    else 45.0
+                )
+                factor_scores["headline_body_alignment"] = FactorScore(
+                    name="Headline/Body Alignment",
+                    value=round(_hl_score - _body_score, 1),
+                    score=_hba_score,
+                    interpretation=f"Headline {_hl_score:.0f}/100 vs Body {_body_score:.0f}/100 → {_alignment} — {'consistent coverage' if _alignment == 'ALIGNED' else 'misleading headline masks bearish content' if _body_score < _hl_score - 20 else 'minor divergence'}",
+                )
+                if _alignment == "DIVERGED" and _body_score < _hl_score - 20:
+                    reasoning.append(f"Headline/body divergence: bullish headline masks bearish body ({_hl_score:.0f} vs {_body_score:.0f}) — credibility concern.")
+        except Exception:
+            pass
+
+        # ── New: FinBERT-Style NLP (Gemini Structured Financial Analysis) ─────
+        try:
+            if _GENAI_AVAILABLE and os.getenv("GEMINI_API_KEY") and retrieved_articles:
+                import google.genai as _genai_fb
+                _fb_client = _genai_fb.Client(api_key=os.getenv("GEMINI_API_KEY"))
+                _fb_context = "\n\n".join(retrieved_articles[:5])
+                _fb_prompt = (
+                    f"You are a financial NLP model (like FinBERT) analyzing news about {ticker}. "
+                    f"Articles:\n\n{_fb_context}\n\n"
+                    "Respond ONLY in this exact format:\n"
+                    "OVERALL_SENTIMENT: [BULLISH/BEARISH/NEUTRAL]\n"
+                    "REVENUE_GUIDANCE: [POSITIVE/NEGATIVE/NEUTRAL/NOT_MENTIONED]\n"
+                    "MANAGEMENT_TONE: [CONFIDENT/CAUTIOUS/ALARMED/NEUTRAL]\n"
+                    "RISK_FACTORS: [HIGH/MEDIUM/LOW]\n"
+                    "CATALYST_PRESENT: [YES/NO]\n"
+                    "CONFIDENCE_SCORE: [0-100]\n"
+                )
+                _fb_resp = _fb_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=_fb_prompt,
+                    config=_genai_fb.types.GenerateContentConfig(temperature=0.0),
+                )
+                _fb_parsed = {}
+                for _line in _fb_resp.text.split("\n"):
+                    if ":" in _line:
+                        _fk, _fv = _line.split(":", 1)
+                        _fb_parsed[_fk.strip()] = _fv.strip()
+                _fb_sent  = _fb_parsed.get("OVERALL_SENTIMENT", "NEUTRAL")
+                _fb_tone  = _fb_parsed.get("MANAGEMENT_TONE", "NEUTRAL")
+                _fb_risk  = _fb_parsed.get("RISK_FACTORS", "MEDIUM")
+                _fb_cat   = _fb_parsed.get("CATALYST_PRESENT", "NO")
+                _fb_guid  = _fb_parsed.get("REVENUE_GUIDANCE", "NEUTRAL")
+                _fb_conf  = min(100.0, max(0.0, float(_fb_parsed.get("CONFIDENCE_SCORE", "50"))))
+                _fb_base  = (70.0 if _fb_sent == "BULLISH" else 30.0 if _fb_sent == "BEARISH" else 50.0)
+                _fb_adj   = (5.0 if _fb_tone == "CONFIDENT" else -5.0 if _fb_tone in ("CAUTIOUS", "ALARMED") else 0.0)
+                _fb_adj  += (-5.0 if _fb_risk == "HIGH" else 3.0 if _fb_risk == "LOW" else 0.0)
+                _fb_adj  += (5.0 if _fb_cat == "YES" else 0.0)
+                _fb_score = max(10.0, min(90.0, _fb_base + _fb_adj))
+                factor_scores["finbert_nlp"] = FactorScore(
+                    name="FinBERT-Style NLP (Gemini)",
+                    value=round(_fb_conf / 100.0, 3),
+                    score=_fb_score,
+                    interpretation=f"Sentiment: {_fb_sent} | Guidance: {_fb_guid} | Tone: {_fb_tone} | Risk: {_fb_risk} | Catalyst: {_fb_cat} (conf {_fb_conf:.0f}/100)",
+                )
+                if _fb_sent == "BULLISH" and _fb_cat == "YES" and _fb_tone == "CONFIDENT":
+                    prob_up += 0.03
+                    reasoning.append(f"FinBERT NLP: bullish catalyst + confident management tone.")
+                elif _fb_sent == "BEARISH" and _fb_risk == "HIGH":
+                    prob_up -= 0.03
+                    reasoning.append(f"FinBERT NLP: bearish + high risk factors detected.")
+        except Exception:
+            pass
+
+        # ── New: Reddit Sentiment (Public JSON — WSB + Stocks + Investing) ───
+        try:
+            import urllib.request as _req_r
+            import json as _json_r
+            _bull_r = ["buy", "calls", "bullish", "moon", "long", "squeeze", "undervalued", "catalyst", "beat", "breakout"]
+            _bear_r = ["puts", "bearish", "short", "overvalued", "crash", "dump", "sell", "avoid", "miss", "downgrade"]
+            _r_bull, _r_bear, _r_total = 0, 0, 0
+            _limit_r = settings.get("backtest.reddit_post_limit", 15)
+            for _sub in ["wallstreetbets", "stocks", "investing"]:
+                try:
+                    _url_r = f"https://www.reddit.com/r/{_sub}/search.json?q={ticker}&sort=new&limit={_limit_r}&restrict_sr=1"
+                    _req_obj = _req_r.Request(_url_r, headers={"User-Agent": "AlphaAgent/1.0"})
+                    with _req_r.urlopen(_req_obj, timeout=5) as _resp_r:
+                        _data_r = _json_r.loads(_resp_r.read())
+                    for _post in _data_r.get("data", {}).get("children", []):
+                        _txt = (_post["data"].get("title", "") + " " + _post["data"].get("selftext", "")).lower()
+                        if ticker.lower() in _txt:
+                            _r_total += 1
+                            _bc = sum(1 for w in _bull_r if w in _txt)
+                            _dc = sum(1 for w in _bear_r if w in _txt)
+                            if _bc > _dc:
+                                _r_bull += 1
+                            elif _dc > _bc:
+                                _r_bear += 1
+                except Exception:
+                    pass
+            if _r_total > 0:
+                _r_bull_pct = _r_bull / _r_total * 100
+                _reddit_score = (72.0 if _r_bull_pct > 60 else 55.0 if _r_bull_pct > 45 else 35.0 if _r_bull_pct < 30 else 45.0)
+                factor_scores["reddit_sentiment"] = FactorScore(
+                    name="Reddit Sentiment (WSB+Stocks+Investing)",
+                    value=round(_r_bull_pct, 1),
+                    score=_reddit_score,
+                    interpretation=f"{_r_total} posts | {_r_bull} bull / {_r_bear} bear ({_r_bull_pct:.0f}% bullish) — r/wallstreetbets, r/stocks, r/investing",
+                )
+                if _r_bull_pct > 70 and _r_total >= 5:
+                    reasoning.append(f"Reddit strongly bullish ({_r_bull_pct:.0f}% of {_r_total} posts).")
+                elif _r_bull_pct < 25 and _r_total >= 5:
+                    reasoning.append(f"Reddit bearish ({_r_bull_pct:.0f}% bullish in {_r_total} posts).")
+        except Exception:
+            pass
+
+        # ── New: News Decay Model (Exponential Age-Weighted Sentiment) ───────
+        try:
+            import time as _t_nd
+            import math as _math_nd
+            _nd_hl    = settings.get("backtest.news_decay_halflife_days", 4.6)
+            _nd_decay = _math_nd.log(2) / _nd_hl
+            _nd_news  = yf.Ticker(ticker).news or []
+            if _nd_news:
+                _now_nd = _t_nd.time()
+                _bull_nd = ["beat", "surge", "up", "growth", "record", "strong", "buy", "upgrade", "profit", "expand"]
+                _bear_nd = ["miss", "drop", "down", "loss", "warning", "sell", "downgrade", "cut", "decline", "weak"]
+                _nd_ws, _nd_ss = [], []
+                for _art in _nd_news[:20]:
+                    _age_d  = max(0.0, (_now_nd - _art.get("providerPublishTime", _now_nd)) / 86400.0)
+                    _weight = _math_nd.exp(-_nd_decay * _age_d)
+                    _title  = (_art.get("title", "") or "").lower()
+                    _bc = sum(1 for w in _bull_nd if w in _title)
+                    _dc = sum(1 for w in _bear_nd if w in _title)
+                    _polarity = 0.65 if _bc > _dc else 0.35 if _dc > _bc else 0.5
+                    _nd_ss.append(_polarity)
+                    _nd_ws.append(_weight)
+                _nd_sum = sum(_nd_ws)
+                if _nd_sum > 0:
+                    _nd_avg  = sum(s * w for s, w in zip(_nd_ss, _nd_ws)) / _nd_sum
+                    _nd_score = max(10.0, min(90.0, _nd_avg * 100))
+                    factor_scores["news_decay"] = FactorScore(
+                        name="News Decay Model (Weighted)",
+                        value=round(_nd_avg, 3),
+                        score=_nd_score,
+                        interpretation=f"Decay-weighted sentiment: {_nd_avg:.2f}/1.0 | {len(_nd_news[:20])} articles | half-life: {_nd_hl:.1f}d | newest weight: {_nd_ws[0]:.2f}, oldest: {_nd_ws[-1]:.2f}",
+                    )
+        except Exception:
+            pass
+
+        # ── New: Unusual Options Activity (Vol/OI > 2x) ──────────────────────
+        try:
+            _tkr_uoa = yf.Ticker(ticker)
+            _vc_exps = _tkr_uoa.options
+            if _vc_exps:
+                _chain_uoa = _tkr_uoa.option_chain(_vc_exps[0])
+                _unusual_calls, _unusual_puts = 0, 0
+                _max_c_ratio, _max_p_ratio = 0.0, 0.0
+                for _df_uoa, _is_call in [(_chain_uoa.calls, True), (_chain_uoa.puts, False)]:
+                    if _df_uoa is not None and not _df_uoa.empty:
+                        for _, _row_uoa in _df_uoa.iterrows():
+                            _vol_uoa = float(_row_uoa.get("volume", 0) or 0)
+                            _oi_uoa  = float(_row_uoa.get("openInterest", 0) or 0)
+                            if _oi_uoa > 100 and _vol_uoa > 0:
+                                _ratio_uoa = _vol_uoa / _oi_uoa
+                                if _is_call:
+                                    if _ratio_uoa > 2.0:
+                                        _unusual_calls += 1
+                                    _max_c_ratio = max(_max_c_ratio, _ratio_uoa)
+                                else:
+                                    if _ratio_uoa > 2.0:
+                                        _unusual_puts += 1
+                                    _max_p_ratio = max(_max_p_ratio, _ratio_uoa)
+                _net_uoa = _unusual_calls - _unusual_puts
+                _uoa_score = (78.0 if _net_uoa >= 3 else 62.0 if _net_uoa >= 1
+                              else 38.0 if _net_uoa <= -1 else 50.0)
+                _uoa_label = ("UNUSUAL CALL SWEEP — institutional demand" if _net_uoa >= 3
+                              else "mild call bias" if _net_uoa >= 1
+                              else "UNUSUAL PUT SWEEP — hedging/bearish bet" if _net_uoa <= -3
+                              else "mild put bias" if _net_uoa <= -1
+                              else "normal options activity")
+                factor_scores["unusual_options"] = FactorScore(
+                    name="Unusual Options Activity",
+                    value=float(_net_uoa),
+                    score=_uoa_score,
+                    interpretation=f"{_unusual_calls} unusual call / {_unusual_puts} unusual put strikes (vol/OI>2x) — {_uoa_label}",
+                )
+                if _unusual_calls >= 3:
+                    reasoning.append(f"Unusual call activity ({_unusual_calls} strikes, max vol/OI {_max_c_ratio:.1f}x) — potential institutional accumulation.")
+                    prob_up += 0.04
+                elif _unusual_puts >= 3:
+                    reasoning.append(f"Unusual put sweep ({_unusual_puts} strikes, max vol/OI {_max_p_ratio:.1f}x) — hedging or directional bearish bet.")
+                    prob_up -= 0.04
+        except Exception:
+            pass
+
+        # ── New: Short-Squeeze Score ─────────────────────────────────────
+        try:
+            import yfinance as _yf_sq
+            _sq_info = _yf_sq.Ticker(ticker).info or {}
+            _short_float = _sq_info.get("shortPercentOfFloat", None)
+            _short_ratio = _sq_info.get("shortRatio", None)
+            if _short_float is not None:
+                _sf_pct = float(_short_float) * 100
+                _days_cover = float(_short_ratio) if _short_ratio else 0.0
+                _sq_score = (80.0 if _sf_pct > 20 and _days_cover > 5 else
+                             68.0 if _sf_pct > 15 else
+                             50.0 if _sf_pct > 8 else 35.0)
+                _squeeze_risk = _sf_pct > 20 and _days_cover > 5
+                factor_scores["short_squeeze"] = FactorScore(
+                    name="Short-Squeeze Score",
+                    value=round(_sf_pct, 1),
+                    score=_sq_score,
+                    interpretation=(
+                        f"Short float: {_sf_pct:.1f}% | Days to cover: {_days_cover:.1f}d — "
+                        f"{'HIGH SQUEEZE RISK — crowded short' if _squeeze_risk else 'elevated short interest' if _sf_pct > 15 else 'moderate short interest' if _sf_pct > 8 else 'low short interest'}"
+                    ),
+                )
+                if _squeeze_risk:
+                    reasoning.append(f"Short-squeeze candidate: {_sf_pct:.0f}% float short, {_days_cover:.1f}d to cover.")
+                    prob_up += 0.03
         except Exception:
             pass
 

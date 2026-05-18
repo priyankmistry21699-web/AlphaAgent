@@ -47,6 +47,23 @@
 ## 🧮 2. Quant Engine (`quant_engine/`)
 *The mathematical brain. Performs heavy calculations on the clean data.*
 
+> **Updated May 2026** — 18 modules total. New additions: `heston.py`, `sabr.py`, `rough_vol.py`, `copula.py`, `granger.py`, `causal_engine.py`, `multifractal.py`, `lob.py`, `quantum_finance.py`
+
+### New Modules (Tier 3/4 additions)
+
+| Module | Theory | Key Formula / Output |
+|--------|--------|---------------------|
+| `heston.py` | Heston Stochastic Vol | dv=κ(θ−v)dt+ξ√v·dW₂ → closed-form IV surface |
+| `sabr.py` | SABR Smile | σ_SABR(K,F,α,β,ρ,ν) Hagan formula → sticky-strike smile |
+| `rough_vol.py` | Rough Vol (rBergomi) | H<0.5 fractional Brownian → realized vol clustering |
+| `copula.py` | Copula Dependency | Gaussian/Clayton/Gumbel → tail co-dependence λ_L |
+| `granger.py` | Granger Causality | F-test VAR(p): does news→price lag exist? |
+| `causal_engine.py` | Do-Calculus DAG | Causal attribution → macro regime → factor driver |
+| `multifractal.py` | Multifractal MF-DFA | h(q) generalized Hurst → scaling spectrum |
+| `lob.py` | Limit Order Book Proxy | Effective spread + market impact model via OHLCV |
+| `quantum_finance.py` | Quantum-Inspired | Amplitude estimation for option pricing (research) |
+
+
 ### `quant_engine.technical.compute_indicators`
 **Purpose:** Calculates 10+ chart indicators and creates a 0-100 Bullish/Bearish score.
 *   **Inputs:** `df` (OHLCV DataFrame from `MarketData.get_ohlcv`)

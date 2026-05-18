@@ -10,6 +10,7 @@ Features:
 """
 
 import time
+import asyncio
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -19,6 +20,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.encoders import jsonable_encoder
 import uvicorn
 
 from data.market import MarketData
@@ -68,6 +70,46 @@ registry = AgentRegistry()
 graph = build_alpha_graph()
 db_manager = DatabaseManager()
 paper_trader = PaperTrader()
+
+
+@app.on_event("startup")
+async def _warm_up_embeddings_in_background():
+    """Warm the sentence-transformer embedding model in a daemon thread so the
+    API is responsive immediately while the model loads in parallel."""
+    import threading
+    try:
+        sentiment_agent = registry.get_agent("sentiment")
+        news_db = getattr(sentiment_agent, "news_db", None)
+        if news_db is not None and hasattr(news_db, "warm_up"):
+            threading.Thread(target=news_db.warm_up, daemon=True, name="embed-warmup").start()
+    except Exception:
+        pass
+
+# Module-level MarketData cache — reuse same object per ticker for 5 min so
+# internal yfinance/options/FRED data isn't re-fetched on every signal request.
+_MD_CACHE: dict[str, tuple] = {}   # ticker -> (MarketData, expire_epoch)
+_MD_TTL = 300                       # seconds
+
+def _get_market_data(ticker: str) -> MarketData:
+    import time as _t
+    ticker = ticker.upper()
+    entry = _MD_CACHE.get(ticker)
+    now = _t.time()
+    if entry and now < entry[1]:
+        return entry[0]
+    md = MarketData(ticker)
+    _MD_CACHE[ticker] = (md, now + _MD_TTL)
+    return md
+
+# Simple TTL caches for slow endpoints (earnings=1h, news=10min)
+_EARNINGS_CACHE: dict = {}   # {"data": [...], "expires": float}
+_NEWS_CACHE: dict = {}       # {"data": [...], "expires": float}
+_EARNINGS_TTL = 3600
+_NEWS_TTL = 600
+
+# Signal result cache — same ticker+horizon within 5 min returns instantly
+_SIGNAL_CACHE: dict[tuple, tuple] = {}   # (ticker, horizon) -> (result_dict, expire)
+_SIGNAL_TTL = 300  # 5 minutes
 
 # ─── REST Endpoints ──────────────────────────────────────────────────────────
 
@@ -317,6 +359,9 @@ async def get_market_news(limit: int = 40):
     from concurrent.futures import ThreadPoolExecutor
     import time as _time
 
+    if _NEWS_CACHE.get("expires", 0) > _time.time():
+        return {"news": _NEWS_CACHE["data"][:limit]}
+
     seen, articles = set(), []
 
     # ── 1. RSS feeds (parallel) ──────────────────────────────────────────
@@ -359,15 +404,21 @@ async def get_market_news(limit: int = 40):
             continue
 
     articles.sort(key=lambda x: x.get("published_at", 0), reverse=True)
+    _NEWS_CACHE["data"] = articles
+    _NEWS_CACHE["expires"] = _time.time() + _NEWS_TTL
     return {"news": articles[:limit]}
 
 
 @app.get("/api/v1/market/earnings")
 async def get_upcoming_earnings():
     """Returns upcoming earnings dates for major stocks."""
+    import time as _t
     import yfinance as yf
     from datetime import date, timedelta
     import pandas as pd
+
+    if _EARNINGS_CACHE.get("expires", 0) > _t.time():
+        return {"earnings": _EARNINGS_CACHE["data"]}
 
     today = date.today()
     cutoff = today + timedelta(days=settings.get("data.earnings_horizon_days", 30))
@@ -416,6 +467,8 @@ async def get_upcoming_earnings():
             continue
 
     results.sort(key=lambda x: x["days_until"])
+    _EARNINGS_CACHE["data"] = results
+    _EARNINGS_CACHE["expires"] = _t.time() + _EARNINGS_TTL
     return {"earnings": results}
 
 
@@ -863,16 +916,27 @@ async def get_signal(ticker: str, horizon: str = "1m"):
     start_time = time.time()
     logger.info(f"Received signal request for: {ticker} (horizon={horizon})")
 
+    # Return cached result if available (avoids full re-analysis within 5 min)
+    _cache_key = (ticker.upper(), horizon)
+    _cached = _SIGNAL_CACHE.get(_cache_key)
+    if _cached and time.time() < _cached[1]:
+        cached_result = _cached[0].copy()
+        cached_result["cached"] = True
+        cached_result["latency_ms"] = 0.1
+        logger.info(f"[{ticker}] Returning cached signal (horizon={horizon})")
+        return cached_result
+
     try:
-        md = MarketData(ticker)
+        md = _get_market_data(ticker)
         initial_state = {
             "ticker": ticker,
             "market_data": md,
             "registry": registry
         }
 
-        # Invoke the LangGraph pipeline
-        result_state = graph.invoke(initial_state)
+        # Run graph.invoke in a thread pool to avoid blocking the asyncio event loop
+        loop = asyncio.get_running_loop()
+        result_state = await loop.run_in_executor(None, lambda: graph.invoke(initial_state))
 
         final_info = result_state["final_signal"]
         packet = final_info["packet"]
@@ -945,7 +1009,7 @@ async def get_signal(ticker: str, horizon: str = "1m"):
             holding_block = holding_block,
         )
 
-        return {
+        raw_dict = {
             "trade_id":       trade_id,
             "ticker":         ticker,
             "horizon":        horizon,
@@ -955,17 +1019,165 @@ async def get_signal(ticker: str, horizon: str = "1m"):
             "conviction":     packet.conviction_pct,
             "multiplier":     final_info.get("multiplier", 1.0),
             "entropy":        final_info.get("entropy", 0.0),
+            "agreement_score": final_info.get("agreement_score", 0.0),
+            "council":        final_info.get("council", []),
             "agents":         packet.agent_results,
             "warnings":       packet.warnings,
             "holding_period": holding_block,
             "summary":        summary,
             "latency_ms":     round(latency_ms, 1),
+            "cached":         False,
         }
+        # Convert Pydantic models → plain dicts, then sanitise NaN/Inf so the
+        # browser's JSON.parse() doesn't choke on bare NaN/Infinity tokens.
+        result_dict = _nan_safe(jsonable_encoder(raw_dict))
+        _SIGNAL_CACHE[_cache_key] = (result_dict, time.time() + _SIGNAL_TTL)
+        return result_dict
         
     except Exception as e:
         logger.error(f"Signal generation failed for {ticker}: {e}", exc_info=True)
         Monitor.record_request(0, success=False)
         raise HTTPException(status_code=500, detail=str(e))
+
+async def _call_ollama(messages: list, system: str = "") -> str:
+    """Call local Ollama model. Returns text response."""
+    import json as _jj, urllib.request as _uu
+    host  = settings.get("ollama.host", "http://localhost")
+    port  = settings.get("ollama.port", 11435)
+    model = settings.get("ollama.model", "mistral:latest")
+    msgs  = ([{"role": "system", "content": system}] if system else []) + list(messages)
+    payload = _jj.dumps({"model": model, "messages": msgs, "stream": False}).encode()
+    req = _uu.Request(f"{host}:{port}/api/chat", data=payload,
+                      headers={"Content-Type": "application/json"})
+    loop = asyncio.get_running_loop()
+    def _fetch():
+        with _uu.urlopen(req, timeout=120) as r:
+            return _jj.loads(r.read())
+    data = await loop.run_in_executor(None, _fetch)
+    return (data.get("message") or {}).get("content", "")
+
+
+@app.get("/api/v1/ticker/info/{ticker}")
+async def get_ticker_info(ticker: str):
+    """OHLCV, fundamentals, 60-day price history and company info for the Signal left panel."""
+    import yfinance as _yf
+    import math as _m
+
+    sym = ticker.upper()
+
+    def _fetch():
+        t    = _yf.Ticker(sym)
+        info = t.info or {}
+
+        def _s(k, d=None):
+            v = info.get(k, d)
+            if isinstance(v, float) and (_m.isnan(v) or _m.isinf(v)):
+                return d
+            return v
+
+        hist   = t.history(period="3mo", interval="1d")
+        closes, dates = [], []
+        if hist is not None and not hist.empty:
+            closes = [round(float(c), 4) for c in hist["Close"].dropna().tolist()[-60:]]
+            dates  = [str(d.date()) for d in hist.index[-60:]]
+
+        change     = _s("regularMarketChange")
+        change_pct = _s("regularMarketChangePercent")
+        price      = _s("regularMarketPrice") or _s("currentPrice")
+        prev_close = _s("regularMarketPreviousClose") or _s("previousClose")
+        if change is None and price and prev_close:
+            change = round(price - prev_close, 4)
+        if change_pct is None and change and prev_close and prev_close != 0:
+            change_pct = round(change / prev_close * 100, 4)
+
+        return {
+            "ticker":        sym,
+            "short_name":    _s("shortName") or _s("longName") or sym,
+            "sector":        _s("sector"),
+            "industry":      _s("industry"),
+            "exchange":      _s("exchange") or _s("fullExchangeName"),
+            "currency":      _s("currency", "USD"),
+            "price":         price,
+            "open":          _s("regularMarketOpen") or _s("open"),
+            "high":          _s("regularMarketDayHigh") or _s("dayHigh"),
+            "low":           _s("regularMarketDayLow") or _s("dayLow"),
+            "close":         prev_close,
+            "volume":        _s("regularMarketVolume") or _s("volume"),
+            "change":        change,
+            "change_pct":    change_pct,
+            "week52_high":   _s("fiftyTwoWeekHigh"),
+            "week52_low":    _s("fiftyTwoWeekLow"),
+            "market_cap":    _s("marketCap"),
+            "pe_trailing":   _s("trailingPE"),
+            "pe_forward":    _s("forwardPE"),
+            "eps":           _s("trailingEps"),
+            "beta":          _s("beta"),
+            "dividend_yield":_s("dividendYield"),
+            "avg_volume":    _s("averageVolume") or _s("averageVolume10days"),
+            "short_ratio":   _s("shortRatio"),
+            "description":   (_s("longBusinessSummary") or "")[:320],
+            "closes":        closes,
+            "dates":         dates,
+        }
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fetch)
+    except Exception as e:
+        logger.warning(f"Ticker info failed for {sym}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/ticker/chart/{ticker}")
+async def get_ticker_chart(ticker: str, period: str = "3mo", interval: str = "1d"):
+    """OHLCV time-series for the interactive price chart in the Signal left panel."""
+    import yfinance as _yf
+    import math as _m
+
+    VALID_PERIODS   = {"1d","5d","1mo","3mo","6mo","1y","5y"}
+    VALID_INTERVALS = {"1m","5m","15m","30m","1h","1d","1wk","1mo"}
+    if period   not in VALID_PERIODS:   period   = "3mo"
+    if interval not in VALID_INTERVALS: interval = "1d"
+
+    sym = ticker.upper()
+
+    def _fetch():
+        t    = _yf.Ticker(sym)
+        hist = t.history(period=period, interval=interval)
+        if hist is None or hist.empty:
+            return {"ticker": sym, "data": [], "period": period, "interval": interval}
+        rows = []
+        intraday = interval in {"1m","5m","15m","30m","1h"}
+        for ts, row in hist.iterrows():
+            def _f(k):
+                v = row.get(k)
+                if v is None: return None
+                try:
+                    f = float(v)
+                    return None if (_m.isnan(f) or _m.isinf(f)) else round(f, 4)
+                except Exception:
+                    return None
+            close = _f("Close")
+            if close is None:
+                continue
+            vol = _f("Volume")
+            rows.append({
+                "date":   ts.strftime("%Y-%m-%d %H:%M") if intraday else str(ts.date()),
+                "open":   _f("Open"),
+                "high":   _f("High"),
+                "low":    _f("Low"),
+                "close":  close,
+                "volume": int(vol) if vol else 0,
+            })
+        return {"ticker": sym, "data": rows, "period": period, "interval": interval}
+
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _fetch)
+    except Exception as e:
+        logger.warning(f"Chart data failed for {sym}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/v1/chat")
 async def signal_chat(body: dict):
@@ -981,6 +1193,61 @@ async def signal_chat(body: dict):
 
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
+
+    # ── Discovery mode: no ticker loaded yet ────────────────────────────────
+    if not ticker:
+        system_prompt = """You are AlphaAgent AI — an expert quantitative trading assistant. The user has not loaded a signal yet. Help them discover what to analyze.
+
+When the user's question implies they want to analyze, trade, or understand performance of a specific asset — end your response with a new line in EXACTLY this format:
+ANALYZE:TICKER
+
+Use the correct yfinance symbol. Reference guide:
+Gold → ANALYZE:GC=F | Silver → ANALYZE:SI=F | Crude Oil → ANALYZE:CL=F | Natural Gas → ANALYZE:NG=F | Copper → ANALYZE:HG=F
+Bitcoin → ANALYZE:BTC-USD | Ethereum → ANALYZE:ETH-USD | Solana → ANALYZE:SOL-USD | XRP → ANALYZE:XRP-USD | BNB → ANALYZE:BNB-USD
+Apple → ANALYZE:AAPL | NVIDIA → ANALYZE:NVDA | Microsoft → ANALYZE:MSFT | Tesla → ANALYZE:TSLA | Amazon → ANALYZE:AMZN
+Google/Alphabet → ANALYZE:GOOGL | Meta → ANALYZE:META | Netflix → ANALYZE:NFLX | AMD → ANALYZE:AMD
+S&P 500 → ANALYZE:SPY | NASDAQ 100 → ANALYZE:QQQ | Dow Jones → ANALYZE:DIA | Russell 2000 → ANALYZE:IWM
+Reliance → ANALYZE:RELIANCE.NS | TCS → ANALYZE:TCS.NS | HDFC Bank → ANALYZE:HDFCBANK.NS | Infosys → ANALYZE:INFY
+ICICI Bank → ANALYZE:ICICIBANK.NS | Nifty 50 / India ETF → ANALYZE:INDA | SBI → ANALYZE:SBIN.NS
+EUR/USD or Euro → ANALYZE:EURUSD=X | GBP/USD → ANALYZE:GBPUSD=X | USD/JPY → ANALYZE:USDJPY=X
+GBP/JPY → ANALYZE:GBPJPY=X | USD/INR or Dollar-Rupee → ANALYZE:USDINR=X | EUR/INR → ANALYZE:EURINR=X
+Alibaba → ANALYZE:BABA | Baidu → ANALYZE:BIDU | NIO → ANALYZE:NIO | Tencent → ANALYZE:TCEHY
+Toyota → ANALYZE:7203.T | Sony → ANALYZE:6758.T | Nintendo → ANALYZE:7974.T | SoftBank → ANALYZE:9984.T
+Gold ETF → ANALYZE:GLD | Silver ETF → ANALYZE:SLV | Oil ETF → ANALYZE:USO | ASML → ANALYZE:ASML | Novo Nordisk → ANALYZE:NVO
+
+Rules:
+- Only append ANALYZE: when user clearly wants to analyze/trade/invest in a specific asset
+- Do NOT include ANALYZE: for general market education questions
+- Keep answer ≤150 words
+- Be conversational and helpful"""
+
+        api_key       = os.environ.get("ANTHROPIC_API_KEY", "")
+        ollama_on     = settings.get("ollama.enabled", False)
+        prefer_ollama = settings.get("ollama.prefer_ollama", False)
+
+        async def _try_ollama_d():
+            return await _call_ollama([{"role": "user", "content": question}], system=system_prompt)
+
+        if ollama_on and prefer_ollama:
+            try:
+                ans = await _try_ollama_d()
+                return {"answer": ans, "ticker": "", "model": "ollama"}
+            except Exception: pass
+        if api_key:
+            try:
+                import anthropic as _an
+                client = _an.Anthropic(api_key=api_key)
+                msg = client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=400,
+                    system=system_prompt, messages=[{"role": "user", "content": question}])
+                ans = msg.content[0].text if msg.content else ""
+                return {"answer": ans, "ticker": "", "model": "claude"}
+            except Exception: pass
+        if ollama_on:
+            try:
+                ans = await _try_ollama_d()
+                return {"answer": ans, "ticker": "", "model": "ollama"}
+            except Exception: pass
+        return {"answer": "Ask me about any stock, crypto, commodity, or forex pair and I'll help you analyze it!", "ticker": ""}
 
     # ── Build system prompt from signal context ─────────────────────────────
     direction  = ctx.get("direction", "NEUTRAL")
@@ -1060,52 +1327,79 @@ Half-Life:       {hl:.1f}d {'(mean-reverting signal — exit by expiry date)' if
 ═══ ACTIVE WARNINGS ═══
 {chr(10).join(f'  !! {w}' for w in warnings) or '  None'}
 
-RULES: Answer only from this context. Do not invent numbers. If entropy > 0.8, note that agents strongly disagree. Use bullet points when listing multiple items. Keep answers ≤200 words unless the user explicitly asks for more detail."""
+RULES: Answer only from this context. Do not invent numbers. If entropy > 0.8, note that agents strongly disagree. Use bullet points when listing multiple items. Keep answers ≤200 words unless the user explicitly asks for more detail.
+If the user asks to analyze a DIFFERENT asset than {ticker}, end your response with: ANALYZE:TICKER (e.g., ANALYZE:GC=F for gold, ANALYZE:BTC-USD for bitcoin, ANALYZE:EURUSD=X for EUR/USD). Only do this when user explicitly asks to switch assets."""
 
-    # ── Call Claude ────────────────────────────────────────────────────────────
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return {"answer": (
-            f"AI assistant is offline — ANTHROPIC_API_KEY not set. "
-            f"Signal summary: {ticker} is **{direction}** with {prob*100:.1f}% probability up "
-            f"and {conviction:.1f}% conviction. "
-            f"Recommended: {summary.get('action', 'N/A')}"
-        )}
+    # ── Determine AI backend ────────────────────────────────────────────────────
+    api_key       = os.environ.get("ANTHROPIC_API_KEY", "")
+    ollama_on     = settings.get("ollama.enabled", False)
+    prefer_ollama = settings.get("ollama.prefer_ollama", False)
 
-    try:
-        import anthropic as _anthropic
-        client = _anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system=system_prompt,
-            messages=[{"role": "user", "content": question}],
-        )
-        answer = msg.content[0].text if msg.content else "No response generated."
-        return {"answer": answer, "ticker": ticker}
-    except Exception as e:
-        logger.error(f"Chat API error: {e}")
-        raise HTTPException(status_code=500, detail=f"AI chat error: {str(e)}")
+    async def _try_ollama():
+        return await _call_ollama([{"role": "user", "content": question}], system=system_prompt)
+
+    # Prefer Ollama when configured, fall back to Claude if it fails
+    if ollama_on and prefer_ollama:
+        try:
+            answer = await _try_ollama()
+            return {"answer": answer, "ticker": ticker, "model": "ollama"}
+        except Exception as oe:
+            logger.debug(f"Ollama fallback for signal chat: {oe}")
+
+    if api_key:
+        try:
+            import anthropic as _anthropic
+            client = _anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=512,
+                system=system_prompt,
+                messages=[{"role": "user", "content": question}],
+            )
+            answer = msg.content[0].text if msg.content else "No response generated."
+            return {"answer": answer, "ticker": ticker, "model": "claude"}
+        except Exception as e:
+            logger.error(f"Claude chat error: {e}")
+
+    # Last resort: Ollama (when no Claude key)
+    if ollama_on:
+        try:
+            answer = await _try_ollama()
+            return {"answer": answer, "ticker": ticker, "model": "ollama"}
+        except Exception as oe:
+            logger.warning(f"Ollama chat failed: {oe}")
+
+    return {"answer": (
+        f"AI assistant is offline. Signal summary: {ticker} is **{direction}** "
+        f"with {prob*100:.1f}% probability up and {conviction:.1f}% conviction. "
+        f"Recommended: {summary.get('action', 'N/A')}"
+    )}
 
 
 @app.get("/api/v1/ticker/holders/{ticker}")
 async def get_ticker_holders(ticker: str):
     """
     Returns institutional holders, mutual fund holders, major-holder percentages,
-    and congressional trading activity for a given ticker.
-    Congressional data requires QUIVER_API_KEY in .env (free tier at quiverquant.com).
+    insider transactions, and congressional trading activity for a given ticker.
     """
     import yfinance as yf
     import math, os
 
     sym = ticker.upper()
-    t   = yf.Ticker(sym)
+
+    def _fetch():
+        t = yf.Ticker(sym)
+        return t
+
+    loop = asyncio.get_running_loop()
+    t = await loop.run_in_executor(None, _fetch)
 
     result: dict = {
         "ticker":              sym,
         "major_holders":       {},
         "institutional":       [],
         "mutual_funds":        [],
+        "insider_transactions": [],
         "congressional":       [],
         "congressional_note":  "",
     }
@@ -1191,72 +1485,151 @@ async def get_ticker_holders(ticker: str):
     except Exception:
         pass
 
-    # ── Congressional trades (House + Senate Stock Watcher — free, no key) ──
+    # ── Insider transactions (Form 4 — yfinance) ─────────────────────────────
+    try:
+        it = t.insider_transactions
+        if it is not None and not it.empty:
+            for _, row in it.head(15).iterrows():
+                name   = str(row.get("Name", row.get("Insider", "")))
+                title  = str(row.get("Title", row.get("Relationship", "")))
+                txn    = str(row.get("Transaction", row.get("Type", "")))
+                shares = _safe(row.get("Shares", row.get("Share", 0)))
+                val    = _safe(row.get("Value", row.get("Total", 0)))
+                date_s = str(row.get("Start Date", row.get("Date", "")))[:10]
+                if name and name not in ("nan", "None", ""):
+                    result["insider_transactions"].append({
+                        "name":    name,
+                        "title":   title,
+                        "txn":     txn,
+                        "shares":  int(shares) if shares else None,
+                        "value_m": round(val / 1e6, 3) if val else None,
+                        "date":    date_s,
+                    })
+    except Exception:
+        pass
+
+    # ── Congressional trades (Quiver Quant API or STOCK Act S3 fallbacks) ──
     try:
         import urllib.request as _ureq
         import json as _json
 
         _HEADERS = {"User-Agent": "AlphaAgent/2.0", "Accept": "application/json"}
+        _qq_key = settings.get("api_keys.quiverquant", "")
 
-        # ── House of Representatives (STOCK Act disclosures) ─────────────
+        # ── Primary: US Senate EFTS (official government API, free, no key) ──────
         try:
-            _house_url = (
-                "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com"
-                "/data/all_transactions.json"
+            import urllib.parse as _urlparse
+            from datetime import date as _date_cls
+            _q = _urlparse.quote(f'"{sym}"')
+            _today_s = _date_cls.today().isoformat()
+            _efts_url = (
+                "https://efts.senate.gov/LATEST/search-index"
+                f"?q={_q}"
+                "&dateRange=custom&fromDate=2021-01-01"
+                f"&toDate={_today_s}"
+                "&category=All+Transactions"
+                "&results_count=20"
+                "&sort=transaction_date&order=desc"
             )
-            _req = _ureq.Request(_house_url, headers=_HEADERS)
-            with _ureq.urlopen(_req, timeout=10) as _resp:
-                _house_data = _json.loads(_resp.read())
-            for _tr in _house_data:
-                if str(_tr.get("ticker", "")).upper().strip() == sym:
-                    result["congressional"].append({
-                        "politician":  _tr.get("representative", "Unknown"),
-                        "party":       _tr.get("party", ""),
-                        "chamber":     "House",
-                        "transaction": _tr.get("type", ""),
-                        "range":       _tr.get("amount", ""),
-                        "date":        _tr.get("transaction_date", ""),
-                    })
-                    if len(result["congressional"]) >= 6:
-                        break
+            _efts_req = _ureq.Request(_efts_url, headers=_HEADERS)
+            with _ureq.urlopen(_efts_req, timeout=10) as _efts_resp:
+                _efts_data = _json.loads(_efts_resp.read())
+            for _hit in _efts_data.get("hits", {}).get("hits", []):
+                _src = _hit.get("_source", {})
+                _fname = (_src.get("first_name") or "").strip()
+                _lname = (_src.get("last_name") or "").strip()
+                _sen_name = f"{_fname} {_lname}".strip() or _src.get("senator", "Unknown")
+                _party = (_src.get("party") or "").upper()[:1]  # D / R / I
+                for _tx in (_src.get("txs") or []):
+                    _tx_ticker = (_tx.get("ticker") or "").upper().strip()
+                    _tx_desc = (_tx.get("asset_description") or "").upper()
+                    if _tx_ticker == sym or (not _tx_ticker and sym in _tx_desc):
+                        _tx_date = (
+                            _tx.get("transaction_date")
+                            or _tx.get("date")
+                            or _src.get("date", "")
+                        )
+                        result["congressional"].append({
+                            "politician":  _sen_name,
+                            "party":       _party,
+                            "chamber":     "Senate",
+                            "transaction": _tx.get("type", ""),
+                            "range":       _tx.get("amount", ""),
+                            "date":        str(_tx_date)[:10],
+                        })
+                        if len(result["congressional"]) >= 15:
+                            break
+                if len(result["congressional"]) >= 15:
+                    break
         except Exception as _e:
-            logger.debug(f"House Stock Watcher failed: {_e}")
+            logger.debug(f"Senate EFTS fetch failed: {_e}")
 
-        # ── Senate (STOCK Act disclosures) ────────────────────────────────
-        try:
-            _senate_url = (
-                "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com"
-                "/aggregate/all_transactions.json"
-            )
-            _req2 = _ureq.Request(_senate_url, headers=_HEADERS)
-            with _ureq.urlopen(_req2, timeout=10) as _resp2:
-                _senate_data = _json.loads(_resp2.read())
-            for _tr in _senate_data:
-                if str(_tr.get("ticker", "")).upper().strip() == sym:
-                    _name = (
-                        f"{_tr.get('first_name', '')} {_tr.get('last_name', '')}".strip()
-                        or _tr.get("senator", "Unknown")
-                    )
+        # ── Secondary: House + Senate Stock Watcher S3 (free, may be unavailable) ──
+        if not result["congressional"]:
+            for _s3_url, _chamber_name in [
+                ("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json", "House"),
+                ("https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json", "Senate"),
+            ]:
+                try:
+                    _sr = _ureq.Request(_s3_url, headers=_HEADERS)
+                    with _ureq.urlopen(_sr, timeout=6) as _srr:
+                        _s3_data = _json.loads(_srr.read())
+                    _max = 6 if _chamber_name == "House" else 12
+                    for _tr in _s3_data:
+                        if str(_tr.get("ticker", "")).upper().strip() == sym:
+                            _name_s3 = (
+                                _tr.get("representative") or
+                                f"{_tr.get('first_name','')} {_tr.get('last_name','')}".strip() or
+                                _tr.get("senator", "Unknown")
+                            )
+                            result["congressional"].append({
+                                "politician":  _name_s3,
+                                "party":       _tr.get("party", ""),
+                                "chamber":     _chamber_name,
+                                "transaction": _tr.get("type", ""),
+                                "range":       _tr.get("amount", ""),
+                                "date":        _tr.get("transaction_date", ""),
+                            })
+                            if len(result["congressional"]) >= _max:
+                                break
+                except Exception as _e:
+                    logger.debug(f"{_chamber_name} Stock Watcher S3 failed: {_e}")
+
+        # ── Tertiary: Quiver Quant if API key is configured ─────────────────────
+        if not result["congressional"] and _qq_key:
+            try:
+                _qq_url = f"https://api.quiverquant.com/beta/live/congresstrading/{sym}"
+                _qq_req = _ureq.Request(
+                    _qq_url,
+                    headers={**_HEADERS, "Authorization": f"Token {_qq_key}"},
+                )
+                with _ureq.urlopen(_qq_req, timeout=10) as _qqr:
+                    _qq_data = _json.loads(_qqr.read())
+                for _tr in (_qq_data or [])[:15]:
+                    _party = _tr.get("Party", "")
+                    if _party.lower().startswith("rep"):
+                        _party = "R"
+                    elif _party.lower().startswith("dem"):
+                        _party = "D"
                     result["congressional"].append({
-                        "politician":  _name,
-                        "party":       _tr.get("party", ""),
-                        "chamber":     "Senate",
-                        "transaction": _tr.get("type", ""),
-                        "range":       _tr.get("amount", ""),
-                        "date":        _tr.get("transaction_date", ""),
+                        "politician":  _tr.get("Representative", "Unknown"),
+                        "party":       _party,
+                        "chamber":     _tr.get("House", ""),
+                        "transaction": _tr.get("Transaction", ""),
+                        "range":       _tr.get("Range", ""),
+                        "date":        (_tr.get("TransactionDate") or _tr.get("ReportDate", ""))[:10],
                     })
-                    if len(result["congressional"]) >= 12:
-                        break
-        except Exception as _e:
-            logger.debug(f"Senate Stock Watcher failed: {_e}")
+            except Exception as _e:
+                logger.debug(f"Quiver Quant congressional fetch failed: {_e}")
 
         if result["congressional"]:
             result["congressional_note"] = (
-                f"{len(result['congressional'])} trade(s) found "
-                "via House & Senate Stock Watcher (STOCK Act)"
+                f"{len(result['congressional'])} trade(s) — STOCK Act disclosures "
+                f"(Senate: {sum(1 for c in result['congressional'] if c['chamber']=='Senate')} · "
+                f"House: {sum(1 for c in result['congressional'] if c['chamber']=='House')})"
             )
         else:
-            result["congressional_note"] = f"No congressional trades on record for {sym}"
+            result["congressional_note"] = "no_data"
 
     except Exception as _e:
         logger.warning(f"Congressional data fetch failed for {sym}: {_e}")
@@ -1303,10 +1676,33 @@ async def market_chat(body: dict):
 
     news_block     = "\n".join(f"- {h}" for h in news_headlines[:10]) or "- (headlines unavailable)"
     today_str      = date.today().isoformat()
+    market_ctx     = body.get("market_context") or {}
+
+    # Build live prices/sectors block from frontend context
+    mkt_lines = []
+    if market_ctx.get("us_markets"):
+        mkt_lines.append(f"US Markets: {market_ctx['us_markets']}")
+    if market_ctx.get("global_markets"):
+        mkt_lines.append(f"Global: {market_ctx['global_markets']}")
+    if market_ctx.get("assets"):
+        mkt_lines.append(f"Crypto/Commodities: {market_ctx['assets']}")
+    if market_ctx.get("fx"):
+        mkt_lines.append(f"FX: {market_ctx['fx']}")
+    if market_ctx.get("sectors_up"):
+        mkt_lines.append(f"Sectors UP: {market_ctx['sectors_up']}")
+    if market_ctx.get("sectors_down"):
+        mkt_lines.append(f"Sectors DOWN: {market_ctx['sectors_down']}")
+    if market_ctx.get("upcoming_earnings"):
+        mkt_lines.append(f"Upcoming earnings: {market_ctx['upcoming_earnings']}")
+    if market_ctx.get("news_count"):
+        mkt_lines.append(f"News sentiment: {market_ctx.get('bullish_news',0)} bullish, {market_ctx.get('bearish_news',0)} bearish out of {market_ctx['news_count']} headlines")
+    prices_block = "\n".join(mkt_lines) or "(live prices not yet loaded)"
 
     system_prompt = (
         f"You are Market AI — an intelligent assistant embedded in AlphaAgent, a professional quantitative trading platform.\n\n"
         f"Today: {today_str}\n\n"
+        "=== LIVE MARKET PRICES & CONTEXT ===\n"
+        f"{prices_block}\n\n"
         "=== LIVE MARKET NEWS ===\n"
         f"{news_block}\n\n"
         "=== YOUR CAPABILITIES ===\n"
@@ -1338,13 +1734,52 @@ async def market_chat(body: dict):
         "- Be warm, direct, and actionable. If asked what you can do, explain briefly."
     )
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
+    api_key       = os.environ.get("ANTHROPIC_API_KEY", "")
+    ollama_on     = settings.get("ollama.enabled", False)
+    prefer_ollama = settings.get("ollama.prefer_ollama", False)
+    chat_msgs     = [{"role": h["role"], "content": h["content"]} for h in history[-12:]]
+    chat_msgs.append({"role": "user", "content": message})
+
+    raw = ""
+
+    async def _try_ollama_market():
+        return await _call_ollama(chat_msgs, system=system_prompt)
+
+    if ollama_on and prefer_ollama:
+        try:
+            raw = await _try_ollama_market()
+        except Exception as oe:
+            logger.debug(f"Ollama market-chat fallback: {oe}")
+            raw = ""
+
+    if not raw and api_key:
+        try:
+            import anthropic as _anthropic
+            client = _anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=700,
+                system=system_prompt,
+                messages=chat_msgs,
+            )
+            raw = (msg.content[0].text if msg.content else "").strip()
+        except Exception as e:
+            logger.error(f"Claude market-chat error: {e}")
+            raw = ""
+
+    if not raw and ollama_on:
+        try:
+            raw = await _try_ollama_market()
+        except Exception as oe:
+            logger.warning(f"Ollama market-chat failed: {oe}")
+            raw = ""
+
+    if not raw:
         return {
             "answer": (
-                "Market AI is offline — ANTHROPIC_API_KEY not configured.\n\n"
-                "When enabled, I can answer market news questions, show upcoming earnings, "
-                "and launch deep quant analysis on any stock, ETF, crypto, or commodity."
+                "Market AI is offline — no ANTHROPIC_API_KEY and Ollama unreachable.\n\n"
+                "Set ANTHROPIC_API_KEY in your environment, or ensure Ollama is running "
+                f"on port {settings.get('ollama.port', 11435)} and enable it in ⚙️ Settings."
             ),
             "intent": "general",
             "ticker": None,
@@ -1352,19 +1787,6 @@ async def market_chat(body: dict):
         }
 
     try:
-        import anthropic as _anthropic
-        client = _anthropic.Anthropic(api_key=api_key)
-
-        messages = [{"role": h["role"], "content": h["content"]} for h in history[-12:]]
-        messages.append({"role": "user", "content": message})
-
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=700,
-            system=system_prompt,
-            messages=messages,
-        )
-        raw = (msg.content[0].text if msg.content else "").strip()
 
         # Parse the JSON action block
         intent     = "general"
@@ -1941,7 +2363,7 @@ async def paper_trade_signal(ticker: str):
     Returns the paper trade ID and signal summary.
     """
     try:
-        md = MarketData(ticker.upper())
+        md = _get_market_data(ticker.upper())
         initial_state = {"ticker": ticker.upper(), "market_data": md, "registry": registry}
         result_state = graph.invoke(initial_state)
         final_info = result_state["final_signal"]
@@ -2246,6 +2668,136 @@ async def get_evt_analysis(ticker: str, period: str = "2y"):
     except Exception as e:
         logger.error(f"EVT analysis failed for {ticker}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Phase 7: Advanced Quant Models ─────────────────────────────────────────
+
+import math as _math
+
+def _nan_safe(obj):
+    """Recursively replace NaN/Inf with None so FastAPI can JSON-serialize."""
+    if isinstance(obj, float):
+        return None if (_math.isnan(obj) or _math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _nan_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_nan_safe(v) for v in obj]
+    return obj
+
+
+@app.get("/api/v1/quant/heston/{ticker}")
+async def get_heston(ticker: str):
+    """Heston SV model: calibrate to options, return vol surface + fair-value signal."""
+    from quant_engine.heston import analyze_heston
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_heston, ticker.upper(), md)
+    return _nan_safe({"ticker": ticker.upper(), **result.__dict__, "params": result.params.__dict__})
+
+@app.get("/api/v1/quant/sabr/{ticker}")
+async def get_sabr(ticker: str):
+    """SABR model: vol smile fitting and skew analysis."""
+    from quant_engine.sabr import analyze_sabr
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_sabr, ticker.upper(), md)
+    return _nan_safe({"ticker": ticker.upper(), **result.__dict__, "params": result.params.__dict__})
+
+@app.get("/api/v1/quant/rough-vol/{ticker}")
+async def get_rough_vol(ticker: str):
+    """Rough Bergomi / rBergomi model with Hurst exponent estimation."""
+    from quant_engine.rough_vol import analyze_rough_vol
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_rough_vol, ticker.upper(), md)
+    return _nan_safe({"ticker": ticker.upper(), **result.__dict__})
+
+@app.post("/api/v1/quant/copula")
+async def get_copula(body: dict):
+    """Copula-based tail dependence between two assets."""
+    import yfinance as yf
+    import asyncio
+    from quant_engine.copula import analyze_copula
+    tickers_list = body.get("tickers", [])
+    ticker_a = (tickers_list[0] if len(tickers_list) > 0 else body.get("ticker_a") or "SPY").upper()
+    ticker_b = (tickers_list[1] if len(tickers_list) > 1 else body.get("ticker_b") or "QQQ").upper()
+    period   = body.get("period", "1y")
+    md_a = _get_market_data(ticker_a)
+    md_b = _get_market_data(ticker_b)
+
+    def _run():
+        ohlcv_a = md_a.get_ohlcv(period)
+        ohlcv_b = md_b.get_ohlcv(period)
+        a = ohlcv_a["Close"].pct_change().dropna().values
+        b = ohlcv_b["Close"].pct_change().dropna().values
+        n = min(len(a), len(b))
+        return analyze_copula(a[-n:], b[-n:])
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _run)
+        return _nan_safe({"ticker_a": ticker_a, "ticker_b": ticker_b, **result.__dict__})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/quant/multifractal/{ticker}")
+async def get_multifractal(ticker: str):
+    """Markov-Switching Multifractal (MSM) vol model and DFA Hurst exponent."""
+    from quant_engine.multifractal import analyze_multifractal
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_multifractal, ticker.upper(), md)
+    return _nan_safe({"ticker": ticker.upper(), **result.__dict__})
+
+@app.get("/api/v1/quant/granger/{ticker}")
+async def get_granger(ticker: str):
+    """Granger causality: which macro/sector series drive this ticker?"""
+    from quant_engine.granger import analyze_granger
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_granger, ticker.upper(), md)
+    tests_serial = [t.__dict__ for t in result.tests]
+    return _nan_safe({"ticker": ticker.upper(),
+            **{k: v for k, v in result.__dict__.items() if k != "tests"},
+            "tests": tests_serial})
+
+@app.get("/api/v1/quant/causal/{ticker}")
+async def get_causal(ticker: str):
+    """Do-calculus / structural causal model: causal factor analysis."""
+    from quant_engine.causal_engine import analyze_causal
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_causal, ticker.upper(), md)
+    effects_serial = [e.__dict__ for e in result.causal_effects]
+    return _nan_safe({"ticker": ticker.upper(),
+            **{k: v for k, v in result.__dict__.items() if k != "causal_effects"},
+            "causal_effects": effects_serial})
+
+@app.get("/api/v1/quant/lob/{ticker}")
+async def get_lob(ticker: str):
+    """LOB microstructure: Kyle lambda, Amihud, PIN, VPIN, Roll spread."""
+    from quant_engine.lob import analyze_lob
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_lob, ticker.upper(), md)
+    return _nan_safe({"ticker": ticker.upper(), **result.__dict__})
+
+@app.get("/api/v1/quant/quantum/{ticker}")
+async def get_quantum_finance(ticker: str):
+    """Quantum finance: QAE option pricing, QAOA portfolio, quantum annealing selection."""
+    from quant_engine.quantum_finance import analyze_quantum_finance
+    import asyncio
+    md = _get_market_data(ticker.upper())
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, analyze_quantum_finance, ticker.upper(), md)
+    return _nan_safe({"ticker": ticker.upper(), **result.__dict__})
 
 
 # ─── Phase 6: RL Portfolio Rebalancer ────────────────────────────────────────

@@ -454,6 +454,20 @@ class GeopoliticalAgent(BaseAgent):
                         f"{'extreme geopolitical risk' if _gpr_rel > 2.0 else 'elevated risk' if _gpr_rel > 1.5 else 'calm — geopolitical tailwind' if _gpr_rel < 0.75 else 'moderate risk'}"
                     ),
                 )
+                # ── GPR 30-Day Delta ──────────────────────────────────────
+                if len(_gpr_series) >= 2:
+                    _gpr_prev = float(_gpr_series.iloc[-2].iloc[0])
+                    _gpr_30d_delta = ((_gpr_now - _gpr_prev) / _gpr_prev * 100) if _gpr_prev > 0 else 0.0
+                    _gpr_d_score = max(10.0, min(90.0, 50.0 - _gpr_30d_delta * 0.3))
+                    factor_scores["gpr_30d_delta"] = FactorScore(
+                        name="GPR 30-Day Change",
+                        value=round(_gpr_30d_delta, 1),
+                        score=_gpr_d_score,
+                        interpretation=f"GPR Δ30d: {_gpr_30d_delta:+.1f}% ({_gpr_now:.0f} vs {_gpr_prev:.0f} prior) — {'escalating' if _gpr_30d_delta > 20 else 'de-escalating' if _gpr_30d_delta < -20 else 'stable'}",
+                    )
+                    if _gpr_30d_delta > 30:
+                        prob_up -= 0.05
+                        reasoning.append(f"Geopolitical risk surged {_gpr_30d_delta:+.0f}% in 30 days — rapid escalation signal.")
                 if _gpr_rel > 2.0:
                     prob_up -= 0.08
                     warnings.append(f"GEOPOLITICAL RISK EXTREME: GPR Index {_gpr_rel:.1f}x above historical average.")
@@ -466,6 +480,67 @@ class GeopoliticalAgent(BaseAgent):
                     reasoning.append(f"GPR calm ({_gpr_rel:.2f}x avg) — geopolitical tailwind.")
         except Exception as _e:
             reasoning.append(f"GPR Index unavailable ({_e}).")
+
+        # ── New: Active Conflict / Sanctions / Tariff Risk (News Signals) ──
+        try:
+            import yfinance as _yf_geo
+            _geo_news = _yf_geo.Ticker(ticker).news or []
+            _geo_context = " ".join([
+                (n.get("title", "") + " " + n.get("summary", ""))
+                for n in _geo_news[:15]
+            ]).lower()
+
+            # Active Conflict Score
+            _conflict_kw = ["war", "conflict", "military", "invasion", "attack",
+                            "strike", "troops", "missile", "combat", "escalation"]
+            _conflict_hits = sum(1 for kw in _conflict_kw if kw in _geo_context)
+            _conflict_score = max(10.0, min(90.0, 75.0 - _conflict_hits * 8.0))
+            factor_scores["active_conflict"] = FactorScore(
+                name="Active Conflict Score",
+                value=float(_conflict_hits),
+                score=_conflict_score,
+                interpretation=f"Conflict keywords: {_conflict_hits} — {'active conflict/war risk detected' if _conflict_hits > 3 else 'low-level conflict mentions' if _conflict_hits > 0 else 'no conflict signal'}",
+            )
+            if _conflict_hits > 3:
+                prob_up -= 0.06
+                reasoning.append(f"Active conflict signals in {ticker} news ({_conflict_hits} keywords) — geopolitical risk elevated.")
+
+            # Sanctions Risk
+            _sanction_kw = ["sanction", "embargo", "ban", "blacklist", "ofac",
+                            "export control", "restricted", "blocked entity"]
+            _sanction_hits = sum(1 for kw in _sanction_kw if kw in _geo_context)
+            _sanction_score = max(10.0, min(90.0, 80.0 - _sanction_hits * 15.0))
+            factor_scores["sanctions_risk"] = FactorScore(
+                name="Sanctions Risk",
+                value=float(_sanction_hits),
+                score=_sanction_score,
+                interpretation=f"Sanctions keywords: {_sanction_hits} — {'sanctions risk detected' if _sanction_hits > 1 else 'minor mention' if _sanction_hits == 1 else 'no sanctions signal'}",
+            )
+            if _sanction_hits >= 2:
+                prob_up -= 0.05
+                warnings.append(f"SANCTIONS RISK: {_sanction_hits} sanction-related mentions — trade/access risk for {ticker}.")
+                reasoning.append(f"Sanctions risk signals detected — trade access or operational disruption risk.")
+
+            # Tariff / Trade War / Regulatory Risk
+            _tariff_kw = ["tariff", "trade war", "import tax", "quota", "antidumping",
+                          "protectionism", "retaliatory", "trade restriction"]
+            _reg_kw = ["antitrust", "doj probe", "ftc investigation", "sec investigation",
+                       "regulatory fine", "penalty", "data breach", "gdpr", "class action"]
+            _tariff_hits = sum(1 for kw in _tariff_kw if kw in _geo_context)
+            _reg_hits    = sum(1 for kw in _reg_kw if kw in _geo_context)
+            _tr_combined = _tariff_hits + _reg_hits
+            _tr_score = max(10.0, min(90.0, 75.0 - _tr_combined * 7.0))
+            factor_scores["tariff_regulatory_risk"] = FactorScore(
+                name="Tariff / Regulatory Risk",
+                value=float(_tr_combined),
+                score=_tr_score,
+                interpretation=f"Tariff keywords: {_tariff_hits} | Regulatory: {_reg_hits} — {'elevated policy risk' if _tr_combined > 3 else 'some policy mentions' if _tr_combined > 0 else 'clean regulatory signal'}",
+            )
+            if _tr_combined > 3:
+                prob_up -= 0.04
+                reasoning.append(f"Tariff/regulatory risk elevated ({_tr_combined} keywords) — policy uncertainty for {ticker}.")
+        except Exception:
+            pass
 
         # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
         try:

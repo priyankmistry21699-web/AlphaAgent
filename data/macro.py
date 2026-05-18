@@ -114,5 +114,15 @@ class MacroData:
         unrate = self.get_series("UNRATE", years_back=1)
         if not unrate.empty:
             snapshot["unemployment"] = float(unrate.iloc[-1].iloc[0])
-            
+
+        # Natural Rate of Unemployment / NAIRU (CBO long-run estimate, FRED: NROU)
+        nrou = self.get_series("NROU", years_back=2)
+        if not nrou.empty:
+            snapshot["nrou"] = float(nrou.iloc[-1].iloc[0])
+
+        # 10Y TIPS Real Yield — proxy for real neutral rate r* (FRED: DFII10)
+        dfii10 = self.get_series("DFII10", years_back=1)
+        if not dfii10.empty:
+            snapshot["dfii10"] = float(dfii10.iloc[-1].iloc[0])
+
         return snapshot

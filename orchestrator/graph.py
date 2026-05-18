@@ -49,16 +49,50 @@ class AlphaGraphState(BaseModel):
 # ─── 2. Node Functions ──────────────────────────────────────────────────
 
 def data_ingestion_node(state: AlphaGraphState) -> AlphaGraphState:
-    """Node 1: Pre-warms the data cache to prevent redundant API calls."""
-    logger.info(f"[{state.ticker}] Node: Data Ingestion")
+    """Node 1: Pre-warms the data cache in parallel to prevent redundant API calls."""
+    logger.info(f"[{state.ticker}] Node: Data Ingestion (parallel)")
     md = state.market_data
-    md.get_ohlcv("1y")
-    md.get_financials()
-    md.get_info()
-    try:
-        md.get_yfinance_ticker().news
-    except Exception:
-        pass
+
+    def _fetch_ohlcv():
+        try: md.get_ohlcv("1y")
+        except Exception: pass
+
+    def _fetch_financials():
+        try: md.get_financials()
+        except Exception: pass
+
+    def _fetch_info():
+        try: md.get_info()
+        except Exception: pass
+
+    def _fetch_news():
+        try: md.get_yfinance_ticker().news
+        except Exception: pass
+
+    def _fetch_options():
+        try:
+            t = md.get_yfinance_ticker()
+            if t.options:
+                t.option_chain(t.options[0])   # pre-warm nearest expiry
+        except Exception: pass
+
+    def _fetch_returns():
+        try: md.get_returns("1y")
+        except Exception: pass
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = [
+            pool.submit(_fetch_ohlcv),
+            pool.submit(_fetch_financials),
+            pool.submit(_fetch_info),
+            pool.submit(_fetch_news),
+            pool.submit(_fetch_options),
+            pool.submit(_fetch_returns),
+        ]
+        for f in futs:
+            try: f.result(timeout=20)
+            except Exception: pass
+
     return state
 
 
@@ -84,15 +118,73 @@ def run_agents_node(state: AlphaGraphState) -> AlphaGraphState:
                 warnings=[f"Agent '{name}' failed: {e}"],
             )
 
+    AGENT_TIMEOUT = 28   # seconds per agent before neutral fallback
+
     with ThreadPoolExecutor(max_workers=min(len(active_agents), 9)) as pool:
         futures = {pool.submit(_run_one, n, a): n for n, a in active_agents.items()}
-        for future in as_completed(futures):
-            name, res = future.result()
+        for future in as_completed(futures, timeout=AGENT_TIMEOUT + 5):
+            try:
+                name, res = future.result(timeout=AGENT_TIMEOUT)
+            except Exception as e:
+                name = futures[future]
+                logger.warning(f"[{state.ticker}] Agent '{name}' timed out or errored: {e}")
+                from agents.state import AgentResult, Direction
+                res = AgentResult(
+                    agent_name=name, vote=Direction.HOLD,
+                    probability_up=0.5, confidence=0.0,
+                    reasoning=f"TIMEOUT: {e}", warnings=[f"Agent '{name}' timed out"],
+                )
             results[name] = res
             logger.info(f"[{state.ticker}] Agent '{name}' finished — P(up)={res.probability_up:.3f}")
 
     state.agent_results = results
     return state
+
+
+_PRIOR_CACHE: dict = {}
+_PRIOR_TTL = 3600   # recompute prior at most once per hour
+
+
+def _dynamic_prior(ticker: str) -> float:
+    """
+    Compute a market-regime-aware Bayesian prior instead of a flat 50%.
+
+    Logic:
+      - If SPY is above its 50-day SMA  → slight bullish bias  (0.53)
+      - If SPY is below its 50-day SMA  → slight bearish bias  (0.47)
+      - For non-US assets use the ticker itself vs its own 50d SMA
+      - Falls back to 0.50 on any error
+    """
+    import time as _t
+    import yfinance as _yf
+    import numpy as _np
+
+    cache_key = f"{ticker}_prior"
+    entry = _PRIOR_CACHE.get(cache_key)
+    if entry and _t.time() < entry[1]:
+        return entry[0]
+
+    try:
+        ref = ticker if not ticker.startswith("^") else "SPY"
+        df = _yf.download(ref, period="3mo", interval="1d",
+                          auto_adjust=True, progress=False)
+        closes = df["Close"].squeeze().dropna()
+        if len(closes) >= 50:
+            sma50 = float(closes.iloc[-50:].mean())
+            price = float(closes.iloc[-1])
+            if price > sma50 * 1.005:       # clearly above SMA50
+                prior = 0.53
+            elif price < sma50 * 0.995:     # clearly below SMA50
+                prior = 0.47
+            else:
+                prior = 0.50                # near SMA50 — neutral
+        else:
+            prior = 0.50
+    except Exception:
+        prior = 0.50
+
+    _PRIOR_CACHE[cache_key] = (prior, _t.time() + _PRIOR_TTL)
+    return prior
 
 
 def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
@@ -141,8 +233,9 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
         if not override_reason:
             override_reason = "GEOPOLITICAL OVERRIDE: capped at 35%"
 
-    # ── 2. Bayesian Fusion ───────────────────────────────────────────────
-    fusion = BayesianFusion(prior=0.5)
+    # ── 2. Bayesian Fusion — dynamic prior from SPY vs 50-day SMA ───────
+    _prior = _dynamic_prior(state.ticker)
+    fusion = BayesianFusion(prior=_prior)
 
     # Correlation penalties — prevents double-counting overlapping signals
     CORRELATION_MAP = {
@@ -160,6 +253,7 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
             agent_prob=res.probability_up,
             confidence=res.confidence,
             correlation=corr,
+            agent_name=agent_name,
         )
 
     final_prob = fusion.posterior
@@ -245,6 +339,8 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
         "multiplier": multiplier,
         "entropy": fusion.entropy,
         "risk_res": risk_res,
+        "council": fusion.council_summary(),
+        "agreement_score": fusion.agreement_score(),
     }
     return state
 

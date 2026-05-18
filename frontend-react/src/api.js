@@ -7,18 +7,19 @@ async function req(path, opts = {}) {
 }
 
 export const api = {
-  signal: (ticker, horizon = '1m') => req(`/api/v1/signal/${ticker}?horizon=${horizon}`),
+  signal: (ticker, horizon = '1m', abortSignal) =>
+    req(`/api/v1/signal/${ticker}?horizon=${horizon}`, abortSignal ? { signal: abortSignal } : {}),
   chat: (question, ticker, signal_context) =>
     req('/api/v1/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, ticker, signal_context }),
     }),
-  marketChat: (message, history) =>
+  marketChat: (message, history, marketContext) =>
     req('/api/v1/market-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, history }),
+      body: JSON.stringify({ message, history, market_context: marketContext || null }),
     }),
   portfolio: () => req('/api/v1/portfolio/summary'),
   positions: () => req('/api/v1/portfolio/positions'),
@@ -83,7 +84,34 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  quantHeston: (ticker) => req(`/api/v1/quant/heston/${ticker}`),
+  quantSABR: (ticker) => req(`/api/v1/quant/sabr/${ticker}`),
+  quantRoughVol: (ticker) => req(`/api/v1/quant/rough-vol/${ticker}`),
+  quantCopula: (tickerA, tickerB) =>
+    req('/api/v1/quant/copula', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers: [tickerA, tickerB] }),
+    }),
+  quantMultifractal: (ticker) => req(`/api/v1/quant/multifractal/${ticker}`),
+  quantGranger: (ticker) => req(`/api/v1/quant/granger/${ticker}`),
+  quantCausal: (ticker) => req(`/api/v1/quant/causal/${ticker}`),
+  quantLOB: (ticker) => req(`/api/v1/quant/lob/${ticker}`),
+  quantQuantum: (ticker) => req(`/api/v1/quant/quantum/${ticker}`),
+  holders: (ticker) => req(`/api/v1/ticker/holders/${ticker}`),
+  tickerInfo: (ticker) => req(`/api/v1/ticker/info/${ticker}`),
+  tickerChart: (ticker, period = '3mo', interval = '1d') =>
+    req(`/api/v1/ticker/chart/${ticker}?period=${period}&interval=${interval}`),
   status: () => req('/api/status'),
+  marketSummary: () => req('/api/v1/market/summary'),
+  marketQuotes: (tickers) =>
+    req('/api/v1/market/quotes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers }),
+    }),
+  marketNews: (limit = 40) => req(`/api/v1/market/news?limit=${limit}`),
+  marketEarnings: () => req('/api/v1/market/earnings'),
 };
 
 export function priceColor(v) {
