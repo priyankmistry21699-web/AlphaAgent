@@ -837,12 +837,20 @@ class MacroAgent(BaseAgent):
 
         # ── New: HY Credit Spread (FRED BAMLH0A0HYM2) ───────────────────
         try:
-            _hy_s = macro_data.get_series("BAMLH0A0HYM2", years_back=1)
+            _hy_s = macro_data.get_series("BAMLH0A0HYM2", years_back=5)
             if _hy_s is not None and len(_hy_s) >= 2:
                 _hy_now  = float(_hy_s.iloc[-1].iloc[0])
                 _hy_prev = float(_hy_s.iloc[-5].iloc[0]) if len(_hy_s) >= 5 else _hy_now
                 _hy_chg  = _hy_now - _hy_prev
-                _hy_score = (72.0 if _hy_now < 3.0 else 55.0 if _hy_now < 5.0 else 35.0 if _hy_now < 7.0 else 18.0)
+                # Dynamic "normal" = rolling 5-year median (not hardcoded 3/5/7%)
+                import numpy as _np_hy
+                _hy_5yr_median = float(_np_hy.nanmedian([float(v.iloc[0]) for v in _hy_s.iloc[:].iterrows()
+                                                          if hasattr(v[1], "iloc")] or [4.5]))
+                _hy_tight  = _hy_5yr_median * 0.65   # 35% below median = easy
+                _hy_normal = _hy_5yr_median           # at median = normal
+                _hy_wide   = _hy_5yr_median * 1.40   # 40% above median = stress
+                _hy_score = (72.0 if _hy_now < _hy_tight else 55.0 if _hy_now < _hy_normal
+                             else 35.0 if _hy_now < _hy_wide else 18.0)
                 factor_scores["hy_credit_spread"] = FactorScore(
                     name="HY Credit Spread (OAS)",
                     value=round(_hy_now, 2),
@@ -914,6 +922,213 @@ class MacroAgent(BaseAgent):
                     reasoning.append(f"ERP negative ({_erp:.2f}%) — bonds offer better risk-adjusted return than equities.")
                 elif _erp > 4.0:
                     reasoning.append(f"ERP at {_erp:.2f}% — equities attractively valued vs real bonds.")
+        except Exception:
+            pass
+
+        # ── New: MOVE Index (bond market vol — equities follow) ──────────────
+        try:
+            _move = _yf_close_series("^MOVE", "3mo")
+            if len(_move) >= 10:
+                _move_now  = float(_move.iloc[-1])
+                _move_avg  = float(_move.tail(60).mean()) if len(_move) >= 60 else float(_move.mean())
+                _move_pct  = (_move_now / _move_avg - 1) * 100
+                _move_score = (30.0 if _move_now > 130 else
+                               40.0 if _move_now > 100 else
+                               55.0 if _move_now > 80  else 68.0)
+                factor_scores["move_index"] = FactorScore(
+                    name="MOVE Index (Bond Vol)",
+                    value=round(_move_now, 1),
+                    score=_move_score,
+                    interpretation=(
+                        f"MOVE: {_move_now:.1f} vs 60d avg {_move_avg:.1f} ({_move_pct:+.1f}%) — "
+                        f"{'extreme bond stress → equity risk-off' if _move_now > 130 else 'elevated bond vol → caution' if _move_now > 100 else 'normal bond vol' if _move_now > 80 else 'calm bond market'}"
+                    ),
+                )
+                if _move_now > 100:
+                    warnings.append(f"MOVE Index elevated ({_move_now:.0f}) — bond market stress may spill into equities.")
+        except Exception:
+            pass
+
+        # ── New: TED Spread (T-bill vs SOFR — real funding stress) ──────────
+        try:
+            import yfinance as _yf_ted
+            _tbill = _yf_close_series("^IRX", "3mo")   # 13-week T-bill yield
+            _sofr  = _yf_close_series("^SOFR", "3mo") if len(_yf_close_series("^SOFR", "3mo")) > 5 else None
+            if len(_tbill) >= 5:
+                _tbill_now = float(_tbill.iloc[-1])
+                # Proxy TED = 3M LIBOR proxy (use SOFR + 10bps spread) - T-bill
+                _sofr_proxy = float(_sofr.iloc[-1]) if _sofr is not None and len(_sofr) >= 1 else _tbill_now + 0.20
+                _ted = max(0.0, _sofr_proxy - _tbill_now)
+                _ted_score = (30.0 if _ted > 1.0 else
+                              40.0 if _ted > 0.5 else
+                              55.0 if _ted > 0.3 else 65.0)
+                factor_scores["ted_spread"] = FactorScore(
+                    name="TED Spread (Funding Stress)",
+                    value=round(_ted, 3),
+                    score=_ted_score,
+                    interpretation=(
+                        f"TED proxy: {_ted:.3f}% (SOFR {_sofr_proxy:.2f}% − T-bill {_tbill_now:.2f}%) — "
+                        f"{'crisis-level funding stress' if _ted > 1.0 else 'elevated stress' if _ted > 0.5 else 'moderate stress' if _ted > 0.3 else 'normal funding conditions'}"
+                    ),
+                )
+                if _ted > 0.5:
+                    warnings.append(f"TED spread elevated ({_ted:.2f}%) — interbank funding stress signal.")
+        except Exception:
+            pass
+
+        # ── New: VIX Term Structure (VIX vs VIX3M contango/backwardation) ───
+        try:
+            _vix_spot = _yf_close_series("^VIX", "1mo")
+            _vix3m    = _yf_close_series("^VIX3M", "1mo")
+            if len(_vix_spot) >= 3 and len(_vix3m) >= 3:
+                _vs  = float(_vix_spot.iloc[-1])
+                _v3m = float(_vix3m.iloc[-1])
+                _term_slope = (_v3m - _vs) / _vs * 100   # % contango (+) or backwardation (-)
+                _ts_score = (30.0 if _term_slope < -5 else   # backwardation = fear spike coming
+                             40.0 if _term_slope < -2 else
+                             60.0 if _term_slope < 5  else
+                             70.0)                           # steep contango = complacency
+                factor_scores["vix_term_structure"] = FactorScore(
+                    name="VIX Term Structure (VIX vs VIX3M)",
+                    value=round(_term_slope, 2),
+                    score=_ts_score,
+                    interpretation=(
+                        f"VIX {_vs:.1f} vs VIX3M {_v3m:.1f} | slope: {_term_slope:+.1f}% — "
+                        f"{'BACKWARDATION: near-term fear spike, crisis imminent' if _term_slope < -5 else 'mild backwardation: elevated near-term risk' if _term_slope < -2 else 'contango: calm near-term, normal' if _term_slope < 5 else 'steep contango: complacency, volatility cheap'}"
+                    ),
+                )
+                if _term_slope < -5:
+                    warnings.append(f"VIX term structure in backwardation ({_term_slope:.1f}%) — fear spike signal.")
+                    reasoning.append(f"VIX backwardation ({_term_slope:.1f}%): near-term volatility exceeds forward vol — crisis signal.")
+        except Exception:
+            pass
+
+        # ── New: Nelson-Siegel Yield Curve (Level, Slope, Curvature) ─────────
+        try:
+            import yfinance as _yf_ns
+            _yields = {}
+            for _tn, _yk in [("^IRX", "3M"), ("DGS2", "2Y"), ("^FVX", "5Y"),
+                             ("^TNX", "10Y"), ("^TYX", "30Y")]:
+                try:
+                    _hh = _yf_ns.download(_tn, period="5d", interval="1d",
+                                          auto_adjust=True, progress=False)
+                    if not _hh.empty:
+                        _yields[_yk] = float(_hh["Close"].squeeze().dropna().iloc[-1])
+                except Exception:
+                    continue
+            if "3M" in _yields and "10Y" in _yields and "30Y" in _yields:
+                # NS factors (simplified): Level = avg, Slope = 30Y-3M, Curvature = 2*10Y - 3M - 30Y
+                _ns_level = sum(_yields.values()) / len(_yields)
+                _ns_slope = _yields["30Y"] - _yields["3M"]
+                _ns_curv  = 2 * _yields["10Y"] - _yields["3M"] - _yields["30Y"]
+                _ns_score = (35.0 if _ns_slope < 0 else      # inversion → bearish
+                             50.0 if _ns_slope < 1.0 else
+                             65.0 if _ns_slope < 2.5 else 70.0)
+                factor_scores["nelson_siegel"] = FactorScore(
+                    name="Nelson-Siegel Yield Curve",
+                    value=round(_ns_slope, 2),
+                    score=_ns_score,
+                    interpretation=(
+                        f"NS factors — Level: {_ns_level:.2f}% | Slope: {_ns_slope:+.2f}% | Curv: {_ns_curv:+.2f}% — "
+                        f"{'INVERTED: recession warning' if _ns_slope < 0 else 'flat curve: late cycle' if _ns_slope < 1.0 else 'normal slope' if _ns_slope < 2.5 else 'steep curve: early cycle'}"
+                    ),
+                )
+                if _ns_slope < 0:
+                    warnings.append(f"Yield curve inverted ({_ns_slope:.2f}%) — Nelson-Siegel level recession signal.")
+        except Exception:
+            pass
+
+        # ── New: Business Cycle Phase Model ──────────────────────────────────
+        # Map leading/coincident/lagging indicators to Recovery/Expansion/Slowdown/Contraction
+        try:
+            # Composite from existing factor scores
+            _cycle_leading = []   # PMI, LEI, jobless claims (inverted), retail sales
+            _cycle_coincident = [] # SPY trend, equity breadth, sector momentum
+            _cycle_lagging = []    # CPI, fed funds rate, unemployment
+            for _fk, _fv in factor_scores.items():
+                _fn = _fv.name.lower()
+                if any(k in _fn for k in ["pmi", "lei", "claims", "retail", "sentiment"]):
+                    _cycle_leading.append(_fv.score)
+                elif any(k in _fn for k in ["spy", "sma", "breadth", "sox", "momentum"]):
+                    _cycle_coincident.append(_fv.score)
+                elif any(k in _fn for k in ["cpi", "pce", "fed", "unemploy"]):
+                    _cycle_lagging.append(_fv.score)
+            if _cycle_leading and _cycle_coincident:
+                _ld_avg = sum(_cycle_leading) / len(_cycle_leading)
+                _co_avg = sum(_cycle_coincident) / len(_cycle_coincident)
+                # Phase logic:
+                # Recovery: Leading↑, Coincident↓ (turning point)
+                # Expansion: Leading↑, Coincident↑
+                # Slowdown: Leading↓, Coincident↑ (top forming)
+                # Contraction: Leading↓, Coincident↓
+                if _ld_avg > 55 and _co_avg < 50:
+                    _phase = "RECOVERY"; _cs = 70.0
+                elif _ld_avg > 55 and _co_avg > 50:
+                    _phase = "EXPANSION"; _cs = 75.0
+                elif _ld_avg < 50 and _co_avg > 55:
+                    _phase = "SLOWDOWN"; _cs = 40.0
+                elif _ld_avg < 50 and _co_avg < 50:
+                    _phase = "CONTRACTION"; _cs = 25.0
+                else:
+                    _phase = "TRANSITION"; _cs = 50.0
+                factor_scores["business_cycle"] = FactorScore(
+                    name="Business Cycle Phase",
+                    value=round(_ld_avg - _co_avg, 1),
+                    score=_cs,
+                    interpretation=(
+                        f"Phase: {_phase} | Leading: {_ld_avg:.1f} | Coincident: {_co_avg:.1f} — "
+                        f"{'small-cap/value/cyclicals favoured' if _phase == 'RECOVERY' else 'growth/tech favoured' if _phase == 'EXPANSION' else 'defensives/quality/long-duration bonds favoured' if _phase == 'SLOWDOWN' else 'cash/gold/long-vol favoured' if _phase == 'CONTRACTION' else 'mixed signals'}"
+                    ),
+                )
+                reasoning.append(f"Business cycle phase: {_phase} (lead={_ld_avg:.0f}, coin={_co_avg:.0f}).")
+        except Exception:
+            pass
+
+        # ── New: Cross-Sectional Momentum Dispersion ─────────────────────────
+        try:
+            _cs_tickers = ["SPY", "QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI"]
+            _cs_rets = []
+            for _cst in _cs_tickers:
+                _s = _yf_close_series(_cst, "1mo")
+                if len(_s) >= 5:
+                    _cs_rets.append(float(_s.iloc[-1]) / float(_s.iloc[-5]) - 1)
+            if len(_cs_rets) >= 5:
+                import numpy as _np_cs
+                _cs_disp = float(_np_cs.std(_cs_rets)) * 100
+                _cs_score = (35.0 if _cs_disp > 5.0 else   # high dispersion = momentum regime breaking
+                             50.0 if _cs_disp > 3.0 else
+                             65.0)                           # low dispersion = broad trend, momentum works
+                factor_scores["cs_momentum_dispersion"] = FactorScore(
+                    name="Cross-Sectional Momentum Dispersion",
+                    value=round(_cs_disp, 2),
+                    score=_cs_score,
+                    interpretation=(
+                        f"Sector 5d return dispersion: {_cs_disp:.2f}% — "
+                        f"{'high dispersion: rotation underway, momentum unreliable' if _cs_disp > 5.0 else 'moderate dispersion' if _cs_disp > 3.0 else 'low dispersion: broad trend intact, momentum works'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: FRED Macro Nowcast (composite leading indicator) ────────────
+        try:
+            from quant_engine.fred_nowcast import get_nowcast_cached
+            _nc = get_nowcast_cached(macro_data)
+            if _nc is not None:
+                _nc_score = (75.0 if _nc.direction == "ACCELERATING" else
+                             25.0 if _nc.direction == "DECELERATING" else 50.0)
+                factor_scores["fred_nowcast"] = FactorScore(
+                    name="FRED Macro Nowcast",
+                    value=_nc.composite_z,
+                    score=_nc_score,
+                    interpretation=(
+                        f"Nowcast z={_nc.composite_z:+.2f} ({_nc.n_components} components) | direction: {_nc.direction} — {_nc.interpretation}"
+                    ),
+                )
+                if _nc.direction == "DECELERATING":
+                    reasoning.append(f"FRED nowcast: economy decelerating (z={_nc.composite_z:+.2f}).")
+                elif _nc.direction == "ACCELERATING":
+                    reasoning.append(f"FRED nowcast: expansion accelerating (z={_nc.composite_z:+.2f}).")
         except Exception:
             pass
 

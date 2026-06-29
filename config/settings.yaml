@@ -192,8 +192,8 @@ risk:
   correlation_min_days: 60
   correlation_long_days: 252
   black_swan_sigma: 5.0
-  flash_crash_ticker_pct: 7.0
-  flash_crash_spy_pct: 5.0
+  flash_crash_ticker_pct: 8.0
+  flash_crash_spy_pct: 6.5
   geo_shock_vix: 35.0
   geo_shock_gold_pct: 2.0
   geo_shock_oil_pct: 5.0
@@ -227,8 +227,8 @@ backtest:
   reddit_post_limit: 15
 cache:
   price_ttl_seconds: 3600
-  info_ttl_seconds: 86400
-  financials_ttl_seconds: 604800
+  info_ttl_seconds: 604800
+  financials_ttl_seconds: 1209600
   options_ttl_seconds: 300
   insider_ttl_seconds: 3600
   holders_ttl_seconds: 86400
@@ -239,8 +239,9 @@ rl:
   learning_rate: 0.0003
 agent_defaults:
   neutral_probability: 0.5
-  long_threshold: 0.55
-  short_threshold: 0.45
+  long_threshold: 0.53
+  short_threshold: 0.47
+  bayesian_sensitivity: 1.8
   technical_min_confidence: 0.0
   sentiment_base_confidence: 0.3
   currency_base_confidence: 0.3
@@ -258,6 +259,75 @@ sentiment:
   social_score_mult: 4.0
 api_keys:
   quiverquant: ""
+sector_thresholds:
+  Technology:
+    pe_cheap: 20
+    pe_fair: 38
+    pe_expensive: 65
+    pb_undervalued: 3.0
+    pb_fair: 8.0
+    ps_cheap: 5.0
+    ps_fair: 10.0
+  Healthcare:
+    pe_cheap: 18
+    pe_fair: 28
+    pe_expensive: 50
+    pb_undervalued: 2.0
+    pb_fair: 5.0
+  Financial Services:
+    pe_cheap: 10
+    pe_fair: 16
+    pe_expensive: 25
+    pb_undervalued: 0.8
+    pb_fair: 1.5
+    pb_expensive: 2.5
+  Utilities:
+    pe_cheap: 12
+    pe_fair: 18
+    pe_expensive: 26
+    pb_undervalued: 1.0
+    pb_fair: 2.0
+  Real Estate:
+    pe_cheap: 15
+    pe_fair: 22
+    pe_expensive: 35
+    pb_undervalued: 1.2
+    pb_fair: 2.5
+  Consumer Cyclical:
+    pe_cheap: 12
+    pe_fair: 22
+    pe_expensive: 38
+    ps_cheap: 1.0
+    ps_fair: 3.0
+  Consumer Defensive:
+    pe_cheap: 15
+    pe_fair: 22
+    pe_expensive: 32
+    pb_undervalued: 2.0
+    pb_fair: 4.0
+  Energy:
+    pe_cheap: 8
+    pe_fair: 14
+    pe_expensive: 22
+    pb_undervalued: 0.8
+    pb_fair: 1.5
+  Industrials:
+    pe_cheap: 14
+    pe_fair: 22
+    pe_expensive: 35
+  Communication Services:
+    pe_cheap: 16
+    pe_fair: 28
+    pe_expensive: 50
+    ps_cheap: 3.0
+    ps_fair: 7.0
+  Basic Materials:
+    pe_cheap: 10
+    pe_fair: 18
+    pe_expensive: 28
+    pb_undervalued: 1.0
+    pb_fair: 2.0
+
 ollama:
   enabled: true
   host: "http://localhost"

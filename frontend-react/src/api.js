@@ -52,7 +52,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   scenarios: () => req('/api/v1/scenarios'),
-  leaderboard: () => req('/api/v1/leaderboard?limit=20'),
+  leaderboard: (days = 90) => req(`/api/v1/leaderboard?days=${days}`),
+  leaderboardSignalRuns: (limit = 100) => req(`/api/v1/leaderboard/signal-runs?limit=${limit}`),
+  leaderboardTuneWeights: (days = 90) =>
+    req('/api/v1/leaderboard/tune-weights', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days }),
+    }),
   optimize: (body) =>
     req('/api/v1/optimize', {
       method: 'POST',
@@ -84,6 +91,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  quantExplain: (body) =>
+    req('/api/v1/quant/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
   quantHeston: (ticker) => req(`/api/v1/quant/heston/${ticker}`),
   quantSABR: (ticker) => req(`/api/v1/quant/sabr/${ticker}`),
   quantRoughVol: (ticker) => req(`/api/v1/quant/rough-vol/${ticker}`),
@@ -94,6 +107,8 @@ export const api = {
       body: JSON.stringify({ tickers: [tickerA, tickerB] }),
     }),
   quantMultifractal: (ticker) => req(`/api/v1/quant/multifractal/${ticker}`),
+  quantMarkovRegime: (ticker, window = 20, bullThresh = 0.05) =>
+    req(`/api/v1/quant/markov-regime/${ticker}?window=${window}&bull_thresh=${bullThresh}&bear_thresh=${bullThresh}`),
   quantGranger: (ticker) => req(`/api/v1/quant/granger/${ticker}`),
   quantCausal: (ticker) => req(`/api/v1/quant/causal/${ticker}`),
   quantLOB: (ticker) => req(`/api/v1/quant/lob/${ticker}`),
@@ -112,6 +127,46 @@ export const api = {
     }),
   marketNews: (limit = 40) => req(`/api/v1/market/news?limit=${limit}`),
   marketEarnings: () => req('/api/v1/market/earnings'),
+  portfolioChat: (message, history, portfolio, budget, entryDate, exitDatePref) =>
+    req('/api/v1/portfolio-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, history, portfolio, budget, entry_date: entryDate, exit_date_pref: exitDatePref }),
+    }),
+  setRegion: (region) => req('/api/v1/market/set-region', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ region }),
+  }),
+  aiPortfolioCommit: (positions, capital) =>
+    req('/api/v1/ai-portfolio/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ positions, capital }),
+    }),
+  aiPortfolioLive: () => req('/api/v1/ai-portfolio/live'),
+  aiPortfolioReset: () => req('/api/v1/ai-portfolio', { method: 'DELETE' }),
+  aiPortfolioSell: (ticker) => req(`/api/v1/ai-portfolio/position/${ticker}`, { method: 'DELETE' }),
+  aiPortfolioBuyMore: (ticker, amount) => req(`/api/v1/ai-portfolio/position/${ticker}/buy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  }),
+  warmupStatus: () => req('/api/v1/market/warmup-status'),
+  portfolioScan: (body) =>
+    req('/api/v1/portfolio-scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  strategyBuild: (body) =>
+    req('/api/v1/portfolio/strategy-build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  marketSearch: (q, region = 'all', assetType = 'all', limit = 10) =>
+    req(`/api/v1/market/search?q=${encodeURIComponent(q)}&region=${region}&asset_type=${assetType}&limit=${limit}`),
 };
 
 export function priceColor(v) {

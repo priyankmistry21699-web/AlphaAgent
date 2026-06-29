@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Phase-7%20Complete-22c55e?style=for-the-badge&logo=checkmarx&logoColor=white"/>
+<img src="https://img.shields.io/badge/Phase-8%20Complete-22c55e?style=for-the-badge&logo=checkmarx&logoColor=white"/>
 <img src="https://img.shields.io/badge/Agents-9%20Specialist-3b82f6?style=for-the-badge&logo=probot&logoColor=white"/>
-<img src="https://img.shields.io/badge/Factors-226%2B%20Signals-8b5cf6?style=for-the-badge&logo=chartdotjs&logoColor=white"/>
+<img src="https://img.shields.io/badge/Factors-270%2B%20Signals-8b5cf6?style=for-the-badge&logo=chartdotjs&logoColor=white"/>
 <img src="https://img.shields.io/badge/LLM-Gemini%202.0%20Flash-f59e0b?style=for-the-badge&logo=google&logoColor=white"/>
 <img src="https://img.shields.io/badge/Framework-LangGraph-ef4444?style=for-the-badge&logo=langchain&logoColor=white"/>
 <img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white"/>
@@ -20,13 +20,56 @@
 
 **Production-Grade · Multi-Agent · Quantitative Trading Intelligence**
 
-*9 specialist agents — 226+ factors — 19 quant engine modules — real-time LLM reasoning — dynamic horizon weighting*
+*9 specialist agents — 270+ factors — 37 quant engine modules — real-time LLM reasoning — dynamic horizon weighting — Gemini-powered action agent — 7-market region awareness*
 
 <br/>
 
 > ⚠️ **Educational & Research Use Only — This is NOT financial advice.**
 
 </div>
+
+---
+
+## 🆕 What's New in Phase 8
+
+This phase added 20+ new `quant_engine` modules, an intent-driven **Action Agent** layer, full **multi-region** support, and an **on-demand signal warmer** for instant first-time portfolio scans.
+
+### Action Agent — Portfolio AI Now Executes
+The Portfolio AI chat understands **plain-English intents** and runs the corresponding action against the AI portfolio. Each action **first checks the relevant signal** via the 9-agent pipeline, then either asks for confirmation or auto-executes when the user says "auto"/"go ahead"/"yes".
+
+| User says | Backend action | Signal check |
+|-----------|--------------|--------------|
+| `"buy NVDA"` | Runs NVDA signal → recommends BUY/HOLD/SKIP | ✓ |
+| `"sell my AAPL"` | Runs AAPL signal → recommends EXIT/HOLD with P&L | ✓ |
+| `"buy more TSLA, add 5k"` | Runs TSLA signal → recommends add or warn | ✓ |
+| `"rebalance"` | Lists positions needing trim/add based on current signals | ✓ |
+| `"exit losers automatically"` | Auto-executes EXIT on every losing position | ✓ |
+| `"yes"` (after recommendation) | Executes the proposed action server-side | ✓ |
+| `"invest $100k by next month in india tech"` | Auto-builds Indian portfolio with sector caps + expected P&L | ✓ |
+
+### Region Awareness (US · India · Europe · Asia · Japan · China · Global)
+Every endpoint that scans for opportunities (`portfolio-scan`, `strategy-build`, Portfolio AI chat) now respects the user's selected region. Top 25-30 tickers per region are warmed on-demand so first-time scans complete in ~60-90s.
+
+### On-Demand Signal Warmer
+When the cache is cold, the backend runs the 9-agent pipeline on the top 18 region-specific priority tickers in parallel (4 workers, 90s budget). No more waiting for the background warmer.
+
+### Hardened Reliability
+- Orchestrator now degrades gracefully when a single agent hangs (no more `1 of 9 futures unfinished` 500s)
+- Outer 90s timeout on signal endpoint returns clean HTTP 504 instead of indefinite hangs
+- Yang-Zhang vol estimator now used inside the Risk agent (5–8× more efficient than close-to-close)
+- DCC-GARCH correlation matrix is RMT-cleaned (Marchenko-Pastur eigenvalue clipping)
+- Soft regime blending — agent weights are continuous (P(bull)·W_bull + P(bear)·W_bear + P(crisis)·W_crisis), not discrete state switches
+
+### New Free-Data Integrations
+COT (CFTC Commitment of Traders) · Weather (NOAA HDD/CDD) · EIA petroleum inventory · FRED Macro Nowcast (GDPNow-style) · Google Trends · ETF Premium/Discount to NAV · Commodity Roll Yield
+
+### Handoff Documentation
+Four new docs at the repo root so any new agent or engineer can pick up the system in minutes:
+
+- [`PROJECT_AUDIT.md`](PROJECT_AUDIT.md) — 20-section architecture deep-dive
+- [`COMPLETE_INVENTORY.md`](COMPLETE_INVENTORY.md) — every factor + theory enumerated
+- [`MATH_REFERENCE.md`](MATH_REFERENCE.md) — every formula, every constant, dynamic vs static
+- [`PROJECT_GRAPH.md`](PROJECT_GRAPH.md) + [`PROJECT_GRAPH.json`](PROJECT_GRAPH.json) — visual + machine-readable knowledge graph
 
 ---
 
@@ -423,6 +466,27 @@ flowchart LR
 | `multifractal.py` | **Multifractal MF-DFA** | q-order fluctuation functions → generalized Hurst h(q) → scaling spectrum |
 | `lob.py` | **Limit Order Book (proxy)** | Bid-ask spread proxy via OHLCV → effective spread + market impact model |
 | `quantum_finance.py` | **Quantum-Inspired Finance** | Amplitude estimation for option pricing + QAOA portfolio optimization (research) |
+| `dcc_garch.py` | **Dynamic Conditional Correlation** | Engle DCC(1,1) on GARCH-standardised residuals → time-varying ρ_t with crisis-spike flag |
+| `regime_weights.py` | **Regime-Conditional Weights** | 4 regimes × 8 agents → BULL_TREND / BULL_CHOPPY / BEAR / CRISIS weight tables + auto-detect |
+| `rmt.py` | **Random Matrix Theory** | Marchenko-Pastur eigenvalue clipping → cleans noise from correlation/covariance matrices |
+| `vol_estimators.py` | **High-Efficiency Vol** | Parkinson · Garman-Klass · Rogers-Satchell · Yang-Zhang (5–8× more efficient than CC) |
+| `transaction_costs.py` | **TCM (Almgren-Chriss)** | Bid-ask + √impact + commission + short borrow → realistic backtest P&L correction |
+| `portfolio_risk.py` | **Portfolio Risk** | Portfolio VaR / CVaR · marginal VaR · component VaR · stress scenarios (2008, COVID, 2022) |
+| `deflated_sharpe.py` | **Deflated Sharpe + FDR** | Bailey-Prado 2014 + Probabilistic Sharpe + Benjamini-Hochberg + Bonferroni multiple-testing |
+| `ml_finance.py` | **López de Prado ML Finance** | Fractional Differentiation · Triple Barrier Labeling · Purged K-Fold CV · Walk-Forward |
+| `black_litterman.py` | **Black-Litterman Portfolio** | CAPM equilibrium + Bayesian agent views → posterior expected returns + optimal weights |
+| `hrp.py` | **Hierarchical Risk Parity** | López de Prado 2016 — single-linkage clustering + recursive bisection (no MVO inversion) |
+| `structural_break.py` | **CUSUM Detection** | Page (1954) cumulative-sum test → online detection of parameter drift in returns |
+| `factor_orthogonalization.py` | **Factor Decorrelation** | Gram-Schmidt · PCA rotation · Symmetric Löwdin — removes double-counting between factors |
+| `quantile_regression.py` | **Asymmetric Tails** | Koenker-Bassett IRLS at 5/25/50/75/95 quantiles → asymmetric upside/downside forecasts |
+| `vol_arbitrage.py` | **VRP Trade** | IV² − RV² z-score → explicit SHORT_VOL / LONG_VOL signal with edge in bps |
+| `etf_premium.py` | **ETF NAV Deviation** | Price vs NAV-proxy z-scored → mean-reversion signal with known convergence |
+| `commodity_roll_yield.py` | **Roll Yield** | ETF vs spot futures tracking error → contango/backwardation drag detection |
+| `cot_data.py` | **CFTC Commitment of Traders** | Commercials net-z positioning → smart money BUY/SELL signal (free CFTC API) |
+| `weather_factor.py` | **NOAA Weather Anomaly** | US population-weighted HDD/CDD anomaly → nat gas demand signal (free NOAA API) |
+| `eia_petroleum.py` | **EIA Inventory Proxy** | WTI cointegration proxy for crude/gasoline/distillate inventory pressure |
+| `fred_nowcast.py` | **FRED Macro Nowcast** | Composite of 6 FRED indicators → GDPNow-style accelerating/decelerating gauge |
+| `google_trends.py` | **Retail Attention** | pytrends Google Search Volume → attention-spike bullish / fade-bearish signals |
 
 ---
 

@@ -110,19 +110,22 @@ class BaseAgent(ABC):
 
     def _map_score_to_probability(self, score: float, min_val: float, max_val: float) -> float:
         """
-        Helper method to map a raw score to a 0.0 - 1.0 probability.
-        
-        Args:
-            score: Raw calculated score
-            min_val: Minimum possible raw score (maps to 0.0)
-            max_val: Maximum possible raw score (maps to 1.0)
-            
-        Returns:
-            Probability between 0.0 and 1.0
+        Maps a raw score to a probability via sigmoid stretching.
+
+        A flat linear map (score 52 → P 0.52) produces near-zero log-odds
+        that barely move the Bayesian posterior. Sigmoid stretching amplifies
+        deviations from the midpoint so that a meaningfully bullish score
+        (e.g. 60/100) produces a proportionally stronger probability (≈0.65).
+
+        Score at midpoint → 0.50 (unchanged).
+        Score at extremes → approaches 0/1 faster than linear.
         """
-        # Clamp score to bounds
+        import math
         score = max(min_val, min(max_val, score))
-        
-        # Linear map to 0-1
-        prob = (score - min_val) / (max_val - min_val)
-        return float(prob)
+        mid = (min_val + max_val) / 2.0
+        half_range = (max_val - min_val) / 2.0
+        if half_range == 0:
+            return 0.5
+        normalized = (score - mid) / half_range   # -1 to +1
+        prob = 1.0 / (1.0 + math.exp(-normalized * 3.5))
+        return float(max(0.01, min(0.99, prob)))

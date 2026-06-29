@@ -168,6 +168,8 @@ def validate_financials(data: dict, ticker: str = "") -> dict:
         "totalRevenue", "netIncome", "freeCashflow"
     ]
     
+    if not data:
+        return {}
     cleaned = {}
     for key, value in data.items():
         if value is None or (isinstance(value, float) and np.isnan(value)):

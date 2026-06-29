@@ -169,11 +169,36 @@ class RiskAgent(BaseAgent):
         except Exception as e:
             reasoning.append(f"Black swan detection error ({e}).")
 
-        # ── Override 2: FLASH CRASH (configurable single-day drop) ──────────
+        # ── Override 2: FLASH CRASH (vol-normalized: 3× daily realized vol) ────
         if override_triggered is None:
             try:
-                _fc_ticker = _sr.get("flash_crash_ticker_pct", 7.0)
-                _fc_spy    = _sr.get("flash_crash_spy_pct", 5.0)
+                # Dynamic threshold: 3× realized daily vol (not fixed %)
+                # In low-vol markets a 3% drop IS a flash crash; in high-vol it's noise
+                _fc_ticker_static = _sr.get("flash_crash_ticker_pct", 7.0)
+                _fc_spy_static    = _sr.get("flash_crash_spy_pct", 5.0)
+                try:
+                    import numpy as _np_fc
+                    import yfinance as _yf_fc
+                    _fc_hist = _yf_fc.download(ticker, period="60d", interval="1d",
+                                               auto_adjust=True, progress=False)
+                    if not _fc_hist.empty and len(_fc_hist) >= 20:
+                        _fc_rets = _fc_hist["Close"].squeeze().dropna().pct_change().dropna()
+                        _fc_daily_vol = float(_fc_rets.tail(20).std()) * 100
+                        _fc_ticker = max(3.0, min(_fc_ticker_static, _fc_daily_vol * 3))
+                    else:
+                        _fc_ticker = _fc_ticker_static
+                    _spy_hist = _yf_fc.download("SPY", period="60d", interval="1d",
+                                                auto_adjust=True, progress=False)
+                    if not _spy_hist.empty and len(_spy_hist) >= 20:
+                        _spy_rets = _spy_hist["Close"].squeeze().dropna().pct_change().dropna()
+                        _spy_daily_vol = float(_spy_rets.tail(20).std()) * 100
+                        _fc_spy = max(2.0, min(_fc_spy_static, _spy_daily_vol * 3))
+                    else:
+                        _fc_spy = _fc_spy_static
+                except Exception:
+                    _fc_ticker = _fc_ticker_static
+                    _fc_spy    = _fc_spy_static
+
                 spy_1d = _yf_latest_change("SPY")
                 ticker_1d = _yf_latest_change(ticker)
                 if ticker_1d < -_fc_ticker or spy_1d < -_fc_spy:
@@ -253,12 +278,12 @@ class RiskAgent(BaseAgent):
 
         # ── Standard GARCH Circuit Breakers ───────────────────────────────
         if override_triggered is None:
-            if garch_res.vol_regime == "EXTREME" or evt_res.var_99 < -0.05:
+            if garch_res.vol_regime == "EXTREME" or evt_res.var_99 < -0.08:
                 prob_up = _sr.get("extreme_vol_prob_up", 0.20)
-                multiplier = 0.0
-                reasoning.append("CRITICAL RISK: Market volatility is extreme. Enforcing capital protection.")
-                warnings.append("CRITICAL RISK: Extreme volatility — no trades recommended.")
-            elif garch_res.vol_regime == "HIGH" or evt_res.var_95 < -0.03:
+                multiplier = 0.25   # reduced from 0.0 — still very conservative but allows high-conviction signals
+                reasoning.append("CRITICAL RISK: Extreme volatility. Position sizes reduced to 25%.")
+                warnings.append("CRITICAL RISK: Extreme volatility — positions capped at 25%.")
+            elif garch_res.vol_regime == "HIGH" or evt_res.var_95 < -0.05:
                 prob_up = _sr.get("high_vol_prob_up", 0.40)
                 multiplier = _sr.get("high_vol_multiplier", 0.50)
                 reasoning.append("HIGH RISK: Volatility elevated. Reducing position sizes by 50%.")
@@ -434,6 +459,133 @@ class RiskAgent(BaseAgent):
                         score=creg_score,
                         interpretation=f"{corr_min}D corr: {corr_60:.2f} vs {corr_long}D: {corr_252:.2f} (Δ{corr_delta:+.2f}) — {'decorrelating' if corr_delta < -corr_delta_thresh else 'correlating' if corr_delta > corr_delta_thresh else 'stable'}",
                     )
+        except Exception:
+            pass
+
+        # ── New: Yang-Zhang Efficient Vol (OHLC-based, 7-8x more efficient) ──
+        try:
+            from quant_engine.vol_estimators import yang_zhang_vol
+            _ohlcv_yz = data.get_ohlcv(period="3mo")
+            if _ohlcv_yz is not None and len(_ohlcv_yz) >= 25:
+                _yz_vol = yang_zhang_vol(_ohlcv_yz["Open"], _ohlcv_yz["High"],
+                                         _ohlcv_yz["Low"], _ohlcv_yz["Close"], 20)
+                _cc_vol = float(_ohlcv_yz["Close"].pct_change().tail(20).std() * (252**0.5))
+                if _yz_vol and _cc_vol > 0:
+                    _yz_gap = (_yz_vol / _cc_vol - 1) * 100
+                    _yz_score = (35.0 if _yz_vol > 0.50 else
+                                 50.0 if _yz_vol > 0.30 else
+                                 65.0 if _yz_vol > 0.15 else 70.0)
+                    factor_scores["yang_zhang_efficient_vol"] = FactorScore(
+                        name="Yang-Zhang Efficient Vol (OHLC)",
+                        value=round(_yz_vol * 100, 2),
+                        score=_yz_score,
+                        interpretation=(
+                            f"Yang-Zhang vol: {_yz_vol*100:.1f}% | Close-to-close: {_cc_vol*100:.1f}% | gap: {_yz_gap:+.1f}% — "
+                            f"{'OHLC reveals higher vol than CC suggests' if _yz_gap > 5 else 'CC vol overstates' if _yz_gap < -5 else 'estimators agree'}"
+                        ),
+                    )
+                    if _yz_vol > 0.50:
+                        warnings.append(f"Yang-Zhang vol {_yz_vol*100:.1f}% — extreme volatility from OHLC range.")
+        except Exception:
+            pass
+
+        # ── New: CUSUM Structural-Break Detector on Returns ──────────────────
+        try:
+            from quant_engine.structural_break import CUSUMDetector
+            if returns is not None and len(returns) >= 60:
+                _cu_res = CUSUMDetector(threshold_k=0.5, threshold_h=5.0).detect(returns.tail(120))
+                if _cu_res is not None:
+                    _cu_score = 25.0 if _cu_res.break_detected else 60.0
+                    factor_scores["cusum_structural_break"] = FactorScore(
+                        name="CUSUM Structural Break",
+                        value=_cu_res.cumsum_max,
+                        score=_cu_score,
+                        interpretation=(
+                            f"CUSUM max={_cu_res.cumsum_max:.2f} (threshold {_cu_res.cumsum_threshold:.1f}) | "
+                            f"direction: {_cu_res.direction} — "
+                            f"{'STRUCTURAL BREAK detected: model parameters may have shifted' if _cu_res.break_detected else 'parameters stable'}"
+                        ),
+                    )
+                    if _cu_res.break_detected:
+                        warnings.append(f"CUSUM detected return-distribution break ({_cu_res.direction}, max={_cu_res.cumsum_max:.2f}).")
+        except Exception:
+            pass
+
+        # ── New: Correlation Network Centrality (systemic linkage) ───────────
+        # High centrality stocks crash hardest in selloffs (think GE/C in 2008)
+        try:
+            import numpy as _np_cn
+            import yfinance as _yf_cn
+            _peers = ["SPY", "QQQ", "XLK", "XLF", "XLE", "XLV", "XLY", "XLI", ticker]
+            _hist_cn = _yf_cn.download(_peers, period="6mo", interval="1d",
+                                       auto_adjust=True, progress=False, group_by="ticker")
+            _rets_mat = []
+            _names = []
+            for _p in _peers:
+                try:
+                    _c = _hist_cn[_p]["Close"].dropna() if len(_peers) > 1 else _hist_cn["Close"].dropna()
+                    _r = _c.pct_change().dropna()
+                    if len(_r) >= 60:
+                        _rets_mat.append(_r.tail(60).values)
+                        _names.append(_p)
+                except Exception:
+                    continue
+            if len(_rets_mat) >= 5 and ticker in _names:
+                _min_len = min(len(_r) for _r in _rets_mat)
+                _M = _np_cn.array([r[-_min_len:] for r in _rets_mat])
+                _corr = _np_cn.corrcoef(_M)
+                _corr = _np_cn.nan_to_num(_corr, nan=0.0)
+                # Eigenvector centrality: dominant eigenvector of abs(corr)
+                _abs_corr = _np_cn.abs(_corr)
+                _eigvals, _eigvecs = _np_cn.linalg.eigh(_abs_corr)
+                _centrality = _np_cn.abs(_eigvecs[:, -1])   # dominant eigenvector
+                _t_idx = _names.index(ticker)
+                _tk_cent = float(_centrality[_t_idx] / _centrality.max())
+                _cn_score = (30.0 if _tk_cent > 0.85 else   # high centrality = systemic risk
+                             45.0 if _tk_cent > 0.65 else
+                             65.0 if _tk_cent > 0.40 else 70.0)
+                factor_scores["network_centrality"] = FactorScore(
+                    name="Correlation Network Centrality",
+                    value=round(_tk_cent, 3),
+                    score=_cn_score,
+                    interpretation=(
+                        f"Network centrality: {_tk_cent:.3f} (vs {len(_names)} peers) — "
+                        f"{'highly central: crashes hardest in selloff' if _tk_cent > 0.85 else 'above-avg systemic linkage' if _tk_cent > 0.65 else 'moderate' if _tk_cent > 0.40 else 'peripheral: idiosyncratic'}"
+                    ),
+                )
+                if _tk_cent > 0.85:
+                    warnings.append(f"High network centrality ({_tk_cent:.2f}) — amplified systemic crash risk.")
+        except Exception:
+            pass
+
+        # ── New: DCC-GARCH Dynamic Correlation ───────────────────────────────
+        try:
+            from quant_engine.dcc_garch import DCCGarch
+            import yfinance as _yf_dcc
+            _spy_dcc = _yf_dcc.download("SPY", period="1y", interval="1d",
+                                        auto_adjust=True, progress=False)
+            _tkr_dcc = _yf_dcc.download(ticker, period="1y", interval="1d",
+                                        auto_adjust=True, progress=False)
+            if not _spy_dcc.empty and not _tkr_dcc.empty:
+                _spy_r = _spy_dcc["Close"].squeeze().pct_change().dropna()
+                _tkr_r = _tkr_dcc["Close"].squeeze().pct_change().dropna()
+                _dcc_res = DCCGarch().fit(_tkr_r, _spy_r)
+                if _dcc_res is not None:
+                    _dcc_score = (30.0 if _dcc_res.crisis_flag else
+                                  40.0 if _dcc_res.corr_trend > 0.08 else
+                                  60.0 if _dcc_res.corr_trend < -0.05 else 50.0)
+                    factor_scores["dcc_garch_corr"] = FactorScore(
+                        name="DCC-GARCH Dynamic Correlation",
+                        value=round(_dcc_res.current_corr, 3),
+                        score=_dcc_score,
+                        interpretation=(
+                            f"DCC corr: {_dcc_res.current_corr:.3f} (baseline {_dcc_res.baseline_corr:.3f}) | "
+                            f"trend: {_dcc_res.corr_trend:+.3f} | pct: {_dcc_res.corr_percentile:.0f}th — "
+                            f"{'CRISIS: corr spike, systematic risk rising' if _dcc_res.crisis_flag else 'corr rising: systemic linkage increasing' if _dcc_res.corr_trend > 0.08 else 'corr falling: decorrelating, idiosyncratic' if _dcc_res.corr_trend < -0.05 else 'stable correlation'}"
+                        ),
+                    )
+                    if _dcc_res.crisis_flag:
+                        warnings.append(f"DCC-GARCH: correlation spike ({_dcc_res.corr_trend:+.3f}) — systemic risk contagion signal.")
         except Exception:
             pass
 
@@ -646,6 +798,48 @@ class RiskAgent(BaseAgent):
             pass
 
         reasoning.append(f"Kelly half-size: {kelly_res.half_kelly * 100:.1f}% | Multiplier: {multiplier:.1f}x.")
+
+        # ── CDS spread proxy (P3b) ─────────────────────────────────────────
+        # Use HYG/LQD ratio as a credit-market stress proxy for the sector.
+        # When credit spreads widen rapidly vs historical → equity downside risk.
+        try:
+            import yfinance as _yf_cds
+            import numpy as _np_cds
+            hyg = _yf_cds.Ticker("HYG").history(period="3mo", interval="1d", progress=False)
+            lqd = _yf_cds.Ticker("LQD").history(period="3mo", interval="1d", progress=False)
+            if not hyg.empty and not lqd.empty and len(hyg) >= 20:
+                hyg_c = hyg["Close"].dropna()
+                lqd_c = lqd["Close"].dropna().reindex(hyg_c.index, method="ffill").dropna()
+                common = hyg_c.index.intersection(lqd_c.index)
+                if len(common) >= 20:
+                    ratio = hyg_c.loc[common] / lqd_c.loc[common]
+                    ratio_1m = float(ratio.pct_change(20).iloc[-1]) * 100
+                    ratio_5d = float(ratio.pct_change(5).iloc[-1])  * 100
+                    if ratio_1m < -3.0:
+                        # HYG underperforms LQD — credit stress rising → bearish
+                        prob_up = max(0.20, prob_up - 0.05)
+                        cds_score = 28.0
+                        cds_signal = f"HYG/LQD spread widening {ratio_1m:.1f}% 1M — credit stress ELEVATED"
+                    elif ratio_1m < -1.5 or ratio_5d < -1.0:
+                        prob_up = max(0.25, prob_up - 0.02)
+                        cds_score = 38.0
+                        cds_signal = f"HYG/LQD slightly negative {ratio_1m:.1f}% 1M — credit caution"
+                    elif ratio_1m > 2.0:
+                        prob_up = min(0.80, prob_up + 0.03)
+                        cds_score = 68.0
+                        cds_signal = f"HYG/LQD tightening {ratio_1m:+.1f}% 1M — credit healthy"
+                    else:
+                        cds_score = 52.0
+                        cds_signal = f"HYG/LQD stable ({ratio_1m:+.1f}% 1M)"
+                    factor_scores["cds_proxy"] = FactorScore(
+                        name="CDS Spread Proxy (HYG/LQD)",
+                        value=round(ratio_1m, 2),
+                        score=cds_score,
+                        interpretation=cds_signal,
+                    )
+                    reasoning.append(f"Credit: {cds_signal}.")
+        except Exception:
+            pass
 
         # ── Vote ───────────────────────────────────────────────────────────
         if prob_up < 0.35:

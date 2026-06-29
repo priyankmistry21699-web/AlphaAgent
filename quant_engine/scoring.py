@@ -434,14 +434,79 @@ def compute_valuation_scores(
         except Exception:
             pass
 
-    # Simplified DCF: Gordon Growth Model with 2-stage
-    # Stage 1: grow at earnings_growth_yoy for 5y, then terminal at 3%
+    # ── New: Asset Growth Anomaly (Cooper et al. 2008) ─────────────────────
+    # High asset growth predicts underperformance
+    try:
+        _ta_curr = abs(float(balance_sheet.iloc[:, 0].get("Total Assets", 0) or 0))
+        _ta_prev = abs(float(balance_sheet.iloc[:, 1].get("Total Assets", 0) or 0)) if balance_sheet.shape[1] > 1 else 0
+        if _ta_prev > 0:
+            result["asset_growth_yoy"] = float((_ta_curr / _ta_prev - 1) * 100)
+    except Exception:
+        pass
+
+    # ── New: Net Stock Issuance (Daniel & Titman) ────────────────────────────
+    # Firms that issue shares underperform; share buybacks outperform
+    try:
+        _shares_curr = float(info.get("sharesOutstanding", 0) or 0)
+        _shares_prev = float(info.get("sharesOutstanding", _shares_curr) or _shares_curr)
+        # Use treasury stock change as proxy if available
+        _treasury_curr = abs(float(balance_sheet.iloc[:, 0].get("Treasury Shares Number", 0) or 0))
+        _treasury_prev = abs(float(balance_sheet.iloc[:, 1].get("Treasury Shares Number", 0) or 0)) if balance_sheet.shape[1] > 1 else _treasury_curr
+        _net_issuance_pct = float((_shares_curr - _shares_prev) / max(_shares_prev, 1) * 100) if _shares_prev > 0 else 0.0
+        result["net_issuance_pct"] = _net_issuance_pct
+    except Exception:
+        pass
+
+    # ── New: Gross Profitability / Novy-Marx (2013) ──────────────────────────
+    # (Revenue − COGS) / Total Assets — cleanest quality metric
+    try:
+        _rev = abs(float(income_stmt.iloc[:, 0].get("Total Revenue", 0) or 0))
+        _cogs = abs(float(income_stmt.iloc[:, 0].get("Cost Of Revenue", 0) or
+                          income_stmt.iloc[:, 0].get("Cost of Goods Sold", 0) or 0))
+        _ta_gp = abs(float(balance_sheet.iloc[:, 0].get("Total Assets", 1) or 1))
+        if _ta_gp > 0 and _rev > 0:
+            result["gross_profitability"] = float((_rev - _cogs) / _ta_gp * 100)
+    except Exception:
+        pass
+
+    # ── New: Investment-to-Assets / q-factor (Hou et al.) ───────────────────
+    # High CapEx growth relative to assets → overinvestment → underperformance
+    try:
+        _capex_curr = abs(float(cash_flow.iloc[:, 0].get("Capital Expenditure", 0) or 0))
+        _capex_prev = abs(float(cash_flow.iloc[:, 1].get("Capital Expenditure", 0) or 0)) if cash_flow.shape[1] > 1 else 0
+        _ta_ia = abs(float(balance_sheet.iloc[:, 0].get("Total Assets", 1) or 1))
+        if _ta_ia > 0:
+            result["investment_to_assets"] = float(_capex_curr / _ta_ia * 100)
+            if _capex_prev > 0:
+                result["capex_growth_yoy"] = float((_capex_curr / _capex_prev - 1) * 100)
+    except Exception:
+        pass
+
+    # ── DCF with Dynamic WACC (real-time risk-free + credit spread) ──────────
     try:
         current_price = float(info.get("currentPrice", 0) or 0)
         eps = float(info.get("trailingEps", 0) or 0)
         growth_rate = max(-0.15, min(result["earnings_growth_yoy"] / 100, 0.30))
-        discount_rate = 0.10  # 10% WACC assumption
+
+        # Dynamic WACC: risk-free (10Y Treasury) + equity risk premium + credit spread
+        discount_rate = 0.10   # fallback
         terminal_growth = 0.03
+        try:
+            import yfinance as _yf_wacc
+            _tnx = _yf_wacc.download("^TNX", period="5d", interval="1d",
+                                     auto_adjust=True, progress=False)
+            if not _tnx.empty:
+                _rf = float(_tnx["Close"].squeeze().dropna().iloc[-1]) / 100
+                _erp = 0.055   # long-run equity risk premium ~5.5%
+                _beta = float(info.get("beta", 1.0) or 1.0)
+                _beta = max(0.5, min(2.5, _beta))
+                discount_rate = _rf + _beta * _erp
+                discount_rate = max(0.06, min(0.18, discount_rate))
+                # Terminal growth = inflation proxy (10Y breakeven ~ 2.3%)
+                terminal_growth = min(_rf - 0.015, 0.04)
+                terminal_growth = max(0.01, terminal_growth)
+        except Exception:
+            pass
 
         if current_price > 0 and eps > 0 and discount_rate > terminal_growth:
             dcf_value = 0.0
@@ -449,15 +514,11 @@ def compute_valuation_scores(
             for _ in range(5):
                 eps_t *= (1 + growth_rate)
                 dcf_value += eps_t / ((1 + discount_rate) ** (_ + 1))
-
-            # Terminal value
             terminal_eps = eps_t * (1 + terminal_growth)
             tv = terminal_eps / (discount_rate - terminal_growth)
             dcf_value += tv / ((1 + discount_rate) ** 5)
-
-            result["dcf_implied_upside"] = float(
-                (dcf_value / current_price - 1) * 100
-            )
+            result["dcf_implied_upside"] = float((dcf_value / current_price - 1) * 100)
+            result["dcf_wacc_used"] = round(discount_rate * 100, 2)
     except Exception:
         pass
 

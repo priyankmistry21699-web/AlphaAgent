@@ -384,6 +384,81 @@ class TechnicalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── NEW: 52-Week High Proximity (IBD CANSLIM breakout signal) ──────
+        try:
+            _w52_high  = float(ohlcv["High"].rolling(252, min_periods=100).max().iloc[-1])
+            _w52_low   = float(ohlcv["Low"].rolling(252, min_periods=100).min().iloc[-1])
+            _w52_price = float(ohlcv["Close"].iloc[-1])
+            _pct_from_high = (_w52_price / _w52_high - 1) * 100
+            _w52_range_pct = (_w52_price - _w52_low) / max(_w52_high - _w52_low, 1e-9) * 100
+            _w52_score = (85.0 if _pct_from_high > -5
+                          else 68.0 if _pct_from_high > -15
+                          else 45.0 if _pct_from_high > -30
+                          else 25.0)
+            factor_scores["week52_proximity"] = FactorScore(
+                name="52-Week High Proximity",
+                value=round(_pct_from_high, 2),
+                score=_w52_score,
+                interpretation=(
+                    f"{_pct_from_high:.1f}% from 52W high ${_w52_high:.2f} | "
+                    f"{_w52_range_pct:.0f}% of 52W range | "
+                    f"{'near breakout' if _pct_from_high > -5 else 'oversold bounce candidate' if _pct_from_high < -30 else 'mid-range'}"
+                ),
+            )
+        except Exception:
+            pass
+
+        # ── NEW: Adaptive RSI (thresholds widen in high-fear markets) ───────
+        try:
+            import yfinance as _yf_vix_rsi
+            _vix_rsi = float(_yf_vix_rsi.Ticker("^VIX").history(period="3d")["Close"].dropna().iloc[-1])
+            _rsi_os  = 38 if _vix_rsi > 30 else 32 if _vix_rsi > 20 else 26
+            _rsi_ob  = 62 if _vix_rsi > 30 else 68 if _vix_rsi > 20 else 74
+            _rsi_val = indicators.rsi
+            _adap_score = (100.0 if _rsi_val < _rsi_os
+                           else 0.0  if _rsi_val > _rsi_ob
+                           else 50.0 + (_rsi_os - _rsi_val) / max(_rsi_ob - _rsi_os, 1) * 50.0)
+            factor_scores["adaptive_rsi"] = FactorScore(
+                name="Adaptive RSI (VIX-adjusted)",
+                value=round(_rsi_val, 1),
+                score=round(max(5.0, min(95.0, _adap_score)), 1),
+                interpretation=(
+                    f"RSI {_rsi_val:.1f} | VIX {_vix_rsi:.1f} → "
+                    f"oversold<{_rsi_os} overbought>{_rsi_ob} | "
+                    f"{'oversold' if _rsi_val < _rsi_os else 'overbought' if _rsi_val > _rsi_ob else 'neutral'}"
+                ),
+            )
+        except Exception:
+            pass
+
+        # ── NEW: Signal strength vs ATR (momentum vs noise floor) ────────
+        try:
+            import numpy as _np_atr
+            _hi_atr = ohlcv["High"].iloc[-22:]; _lo_atr = ohlcv["Low"].iloc[-22:]
+            _cl_atr = ohlcv["Close"].iloc[-22:]
+            _cl_prev = _cl_atr.shift(1).fillna(_cl_atr.iloc[0])
+            _tr_atr  = _np_atr.maximum(
+                (_hi_atr - _lo_atr).values,
+                _np_atr.maximum(abs((_hi_atr - _cl_prev).values), abs((_lo_atr - _cl_prev).values))
+            )
+            _atr_pct  = float(_tr_atr.mean()) / float(_cl_atr.iloc[-1]) * 100
+            _mom5d    = (float(_cl_atr.iloc[-1]) / float(ohlcv["Close"].iloc[-6]) - 1) * 100
+            _strength = abs(_mom5d) / max(_atr_pct, 0.1)
+            _atr_score = (78.0 if _strength > 2.5 else 63.0 if _strength > 1.5
+                          else 50.0 if _strength > 0.8 else 38.0)
+            factor_scores["signal_vs_atr"] = FactorScore(
+                name="Signal Strength vs ATR",
+                value=round(_strength, 2),
+                score=_atr_score,
+                interpretation=(
+                    f"5d move {_mom5d:+.1f}% vs ATR {_atr_pct:.2f}%/day → "
+                    f"{_strength:.1f}x ATR | "
+                    f"{'strong directional signal' if _strength > 2.5 else 'moderate' if _strength > 1.5 else 'within noise'}"
+                ),
+            )
+        except Exception:
+            pass
+
         # ── Options-Based Factors (IV Skew, GEX, Max Pain, Implied Corr) ─
         try:
             import yfinance as _yf_opt
@@ -816,6 +891,313 @@ class TechnicalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: Idiosyncratic Volatility Anomaly (Ang et al. 2006) ──────────
+        # High idio vol → systematic underperformance
+        try:
+            import numpy as _np_iv
+            import yfinance as _yf_iv
+            _spy_iv = _yf_iv.download("SPY", period="3mo", interval="1d",
+                                      auto_adjust=True, progress=False)
+            if not _spy_iv.empty:
+                _spy_r = _spy_iv["Close"].squeeze().pct_change().dropna()
+                _tkr_r = ohlcv["Close"].pct_change().dropna()
+                _df_iv = pd.concat([_tkr_r, _spy_r], axis=1, join="inner").dropna()
+                _df_iv.columns = ["t", "m"]
+                if len(_df_iv) >= 30:
+                    _x = _df_iv["m"].values
+                    _y = _df_iv["t"].values
+                    _beta = float(_np_iv.cov(_x, _y)[0, 1] / _np_iv.var(_x))
+                    _alpha = float(_np_iv.mean(_y) - _beta * _np_iv.mean(_x))
+                    _resid = _y - (_alpha + _beta * _x)
+                    _idio_vol = float(_np_iv.std(_resid)) * _np_iv.sqrt(252) * 100
+                    _idio_score = (25.0 if _idio_vol > 60 else
+                                   40.0 if _idio_vol > 40 else
+                                   65.0 if _idio_vol > 20 else 75.0)
+                    factor_scores["idio_volatility"] = FactorScore(
+                        name="Idiosyncratic Volatility (Ang)",
+                        value=round(_idio_vol, 1),
+                        score=_idio_score,
+                        interpretation=(
+                            f"Idio vol (ann): {_idio_vol:.1f}% — "
+                            f"{'extreme idio vol (Ang anomaly: bearish)' if _idio_vol > 60 else 'elevated idio vol' if _idio_vol > 40 else 'moderate' if _idio_vol > 20 else 'low idio vol'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: MAX Anomaly (Bali et al. 2011) ───────────────────────────────
+        # Stocks with highest single-day return in past month underperform (lottery demand)
+        try:
+            _rets_max = ohlcv["Close"].pct_change().dropna().tail(22)
+            if len(_rets_max) >= 15:
+                _max_d = float(_rets_max.max()) * 100
+                _max_score = (30.0 if _max_d > 12 else
+                              40.0 if _max_d > 7  else
+                              60.0 if _max_d > 3  else 65.0)
+                factor_scores["max_anomaly"] = FactorScore(
+                    name="MAX Anomaly (Bali)",
+                    value=round(_max_d, 2),
+                    score=_max_score,
+                    interpretation=(
+                        f"Max 1d return (22d): {_max_d:.1f}% — "
+                        f"{'lottery stock (bearish next month per Bali)' if _max_d > 7 else 'modest spike' if _max_d > 3 else 'no lottery feature'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Short-Run Reversal (Jegadeesh 1990) ──────────────────────────
+        # Past 1-week losers outperform next week
+        try:
+            _rets_1w = ohlcv["Close"].pct_change().dropna().tail(5)
+            if len(_rets_1w) >= 5:
+                _r1w = float((1 + _rets_1w).prod() - 1) * 100
+                _sr_score = (75.0 if _r1w < -5 else      # losers → bullish
+                             60.0 if _r1w < -2 else
+                             40.0 if _r1w > 5  else
+                             25.0 if _r1w > 8  else 50.0)
+                factor_scores["short_run_reversal"] = FactorScore(
+                    name="1-Week Short-Run Reversal",
+                    value=round(_r1w, 2),
+                    score=_sr_score,
+                    interpretation=(
+                        f"1w return: {_r1w:+.2f}% — "
+                        f"{'strong loser → reversal expected (bullish)' if _r1w < -5 else 'mild loser → mean reversion' if _r1w < -2 else 'strong winner → reversal (bearish)' if _r1w > 5 else 'no reversal signal'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Long-Run Reversal (DeBondt-Thaler) ───────────────────────────
+        try:
+            _closes_lr = ohlcv["Close"].dropna()
+            if len(_closes_lr) >= 700:
+                _r3y = float(_closes_lr.iloc[-1] / _closes_lr.iloc[-700] - 1) * 100
+                _lr_score = (70.0 if _r3y < -30 else
+                             55.0 if _r3y < -10 else
+                             45.0 if _r3y > 50  else
+                             35.0 if _r3y > 100 else 50.0)
+                factor_scores["long_run_reversal"] = FactorScore(
+                    name="3-Year Long-Run Reversal",
+                    value=round(_r3y, 1),
+                    score=_lr_score,
+                    interpretation=(
+                        f"3y return: {_r3y:+.1f}% — "
+                        f"{'long-term loser → reversal expected' if _r3y < -30 else 'long-term winner → reversal risk' if _r3y > 100 else 'no extreme'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: 52-Week High Momentum (George-Hwang 2004) ────────────────────
+        try:
+            _hl_52 = ohlcv["Close"].dropna().tail(252)
+            if len(_hl_52) >= 100:
+                _p = float(_hl_52.iloc[-1])
+                _h52 = float(_hl_52.max())
+                _prox = _p / _h52
+                _gh_score = (80.0 if _prox > 0.97 else   # near 52W high → momentum
+                             65.0 if _prox > 0.90 else
+                             50.0 if _prox > 0.80 else
+                             40.0 if _prox > 0.70 else 30.0)
+                factor_scores["week52_high_momentum"] = FactorScore(
+                    name="52W High Momentum (George-Hwang)",
+                    value=round(_prox, 3),
+                    score=_gh_score,
+                    interpretation=(
+                        f"Price/52W high: {_prox:.3f} ({(1-_prox)*100:.1f}% below) — "
+                        f"{'near 52W high: momentum buy signal' if _prox > 0.97 else 'close to high' if _prox > 0.90 else 'mid-range' if _prox > 0.70 else 'deep below high'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Overnight vs Intraday Return Decomposition ───────────────────
+        try:
+            _od_df = ohlcv.dropna().tail(60)
+            if len(_od_df) >= 30:
+                _over = (_od_df["Open"] / _od_df["Close"].shift(1) - 1).dropna()
+                _intr = (_od_df["Close"] / _od_df["Open"] - 1).dropna()
+                _over_mean = float(_over.mean()) * 100
+                _intr_mean = float(_intr.mean()) * 100
+                _ratio = _over_mean - _intr_mean
+                _od_score = (65.0 if _over_mean > 0.1 else
+                             55.0 if _over_mean > 0    else
+                             45.0 if _over_mean > -0.1 else 35.0)
+                factor_scores["overnight_intraday"] = FactorScore(
+                    name="Overnight vs Intraday Return",
+                    value=round(_ratio, 3),
+                    score=_od_score,
+                    interpretation=(
+                        f"Overnight: {_over_mean:+.3f}%/day | Intraday: {_intr_mean:+.3f}%/day — "
+                        f"{'overnight bias (after-hours info bullish)' if _over_mean > _intr_mean + 0.05 else 'intraday bias' if _intr_mean > _over_mean + 0.05 else 'balanced'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Commodity Roll Yield (contango/backwardation drag) ──────────
+        try:
+            from quant_engine.commodity_roll_yield import (
+                compute_roll_yield_cached, COMMODITY_ROLL_PROXIES,
+            )
+            _commodity_etfs = {info["etf"]: sym for sym, info in COMMODITY_ROLL_PROXIES.items()}
+            if ticker.upper() in _commodity_etfs:
+                _sym = _commodity_etfs[ticker.upper()]
+                _ry = compute_roll_yield_cached(_sym)
+                if _ry is not None:
+                    _ry_score = (25.0 if _ry.signal == "AVOID_ETF" else
+                                 75.0 if _ry.signal == "FAVORABLE_ETF" else 50.0)
+                    factor_scores["commodity_roll_yield"] = FactorScore(
+                        name=f"Roll Yield ({_sym})",
+                        value=round(_ry.roll_yield_annual * 100, 2),
+                        score=_ry_score,
+                        interpretation=(
+                            f"Annual roll: {_ry.roll_yield_annual*100:+.1f}% | curve: {_ry.curve_state} ({_ry.severity}) — "
+                            f"{'severe contango drag — avoid this ETF for buy-and-hold' if _ry.signal == 'AVOID_ETF' else 'backwardation tailwind — favorable for ETF' if _ry.signal == 'FAVORABLE_ETF' else 'neutral curve'}"
+                        ),
+                    )
+                    if _ry.signal == "AVOID_ETF" and _ry.severity in ("moderate", "severe"):
+                        warnings.append(f"Roll yield drag on {ticker}: {_ry.roll_yield_annual*100:+.1f}% annualised contango cost.")
+        except Exception:
+            pass
+
+        # ── New: COT Commercials Net Position (smart money) ─────────────────
+        try:
+            from quant_engine.cot_data import get_cot_signal_cached, COT_COMMODITY_MAP
+            _cot_etfs = {info["etf"]: sym for sym, info in COT_COMMODITY_MAP.items()}
+            if ticker.upper() in _cot_etfs:
+                _csym = _cot_etfs[ticker.upper()]
+                _cot = get_cot_signal_cached(_csym)
+                if _cot is not None:
+                    _cot_score = (75.0 if _cot.signal == "BUY_SMART_MONEY" else
+                                  25.0 if _cot.signal == "SELL_SMART_MONEY" else 50.0)
+                    factor_scores["cot_commercials"] = FactorScore(
+                        name=f"COT Commercials Net ({_csym})",
+                        value=_cot.commercials_z,
+                        score=_cot_score,
+                        interpretation=(
+                            f"COT commercials z={_cot.commercials_z:+.2f} | net={_cot.commercials_net:,} | OI={_cot.open_interest:,} | report: {_cot.report_date[:10]} — "
+                            f"{'smart money extreme long: bullish' if _cot.signal == 'BUY_SMART_MONEY' else 'smart money extreme short: bearish' if _cot.signal == 'SELL_SMART_MONEY' else 'no extreme positioning'}"
+                        ),
+                    )
+                    if _cot.signal in ("BUY_SMART_MONEY", "SELL_SMART_MONEY"):
+                        reasoning.append(f"COT: commercials {_cot.signal.lower()} ({_cot.commercials_z:+.2f}σ).")
+        except Exception:
+            pass
+
+        # ── New: Weather Anomaly (natgas / energy sensitivity) ──────────────
+        try:
+            from quant_engine.weather_factor import get_weather_signal_cached
+            _energy_etfs = {"UNG", "USO", "XLE", "XOP"}
+            if ticker.upper() in _energy_etfs:
+                _wx = get_weather_signal_cached()
+                if _wx is not None:
+                    _wx_score = (70.0 if _wx.signal == "BULLISH_NATGAS" and ticker.upper() in ("UNG", "XLE") else
+                                 30.0 if _wx.signal == "BEARISH_NATGAS" and ticker.upper() in ("UNG", "XLE") else 50.0)
+                    factor_scores["weather_anomaly"] = FactorScore(
+                        name="Weather Anomaly (US)",
+                        value=_wx.anomaly_f,
+                        score=_wx_score,
+                        interpretation=(
+                            f"US avg temp: {_wx.current_temp_f}°F | seasonal: {_wx.seasonal_avg_f}°F | anomaly: {_wx.anomaly_f:+.1f}°F | "
+                            f"HDD anom: {_wx.hdd_anomaly:+.1f} | CDD anom: {_wx.cdd_anomaly:+.1f} — "
+                            f"{'extreme heating/cooling demand: bullish nat gas' if _wx.signal == 'BULLISH_NATGAS' else 'mild weather: bearish nat gas' if _wx.signal == 'BEARISH_NATGAS' else 'normal weather'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: EIA Petroleum Inventory Signal (energy ETFs) ────────────────
+        try:
+            from quant_engine.eia_petroleum import get_eia_signal_cached
+            _energy_map = {"USO": "CRUDE", "XLE": "CRUDE", "XOP": "CRUDE",
+                           "UNG": "NATGAS", "UGA": "GASOLINE"}
+            if ticker.upper() in _energy_map:
+                _eia = get_eia_signal_cached(_energy_map[ticker.upper()])
+                if _eia is not None:
+                    _eia_score = (70.0 if _eia.signal == "BULLISH_OIL" else
+                                  30.0 if _eia.signal == "BEARISH_OIL" else 50.0)
+                    factor_scores["eia_inventory"] = FactorScore(
+                        name=f"EIA {_eia.series} Inventory",
+                        value=_eia.change_z_score,
+                        score=_eia_score,
+                        interpretation=(
+                            f"EIA proxy z={_eia.change_z_score:+.2f} | 10d move: {_eia.change_wow_mb:+.2f}% — "
+                            f"{'inventory drawing → bullish oil/energy' if _eia.signal == 'BULLISH_OIL' else 'inventory building → bearish' if _eia.signal == 'BEARISH_OIL' else 'neutral inventory dynamics'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: Google Trends Search Volume (retail attention) ──────────────
+        try:
+            from quant_engine.google_trends import get_trends_signal_cached
+            _gt = get_trends_signal_cached(ticker)
+            if _gt is not None:
+                _gt_score = (70.0 if _gt.signal == "BULLISH_ATTENTION" else
+                             30.0 if _gt.signal == "BEARISH_FADE" else 50.0)
+                factor_scores["google_trends"] = FactorScore(
+                    name="Google Trends Attention",
+                    value=_gt.z_score,
+                    score=_gt_score,
+                    interpretation=(
+                        f"Trends '{_gt.keyword}' z={_gt.z_score:+.2f} | 4w slope: {_gt.trend_4w:+.1f}% — "
+                        f"{'rising retail attention: bullish' if _gt.signal == 'BULLISH_ATTENTION' else 'fading/peaked attention: bearish' if _gt.signal == 'BEARISH_FADE' else 'normal attention'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: ETF Premium/Discount to NAV (mean-reversion signal) ──────────
+        try:
+            from quant_engine.etf_premium import etf_premium_discount, ETF_NAV_PROXY
+            if ticker.upper() in ETF_NAV_PROXY:
+                _ep = etf_premium_discount(ticker.upper())
+                if _ep is not None:
+                    _ep_score = (75.0 if _ep.signal == "BUY_DISCOUNT" else
+                                 25.0 if _ep.signal == "SELL_PREMIUM" else 50.0)
+                    factor_scores["etf_premium"] = FactorScore(
+                        name="ETF Premium/Discount to NAV",
+                        value=_ep.premium_pct,
+                        score=_ep_score,
+                        interpretation=(
+                            f"ETF: ${_ep.price:.2f} | NAV-proxy: {_ep.nav:.2f} | premium: {_ep.premium_pct:+.2f}% | z={_ep.z_score:+.2f} — "
+                            f"{'discount → mean-reversion BUY' if _ep.signal == 'BUY_DISCOUNT' else 'premium → mean-reversion SELL' if _ep.signal == 'SELL_PREMIUM' else 'no NAV anomaly'}"
+                        ),
+                    )
+                    if _ep.signal in ("BUY_DISCOUNT", "SELL_PREMIUM"):
+                        reasoning.append(f"ETF NAV anomaly: {_ep.signal} (z={_ep.z_score:+.2f}) — known convergence to NAV.")
+        except Exception:
+            pass
+
+        # ── New: Momentum Crash Risk (Daniel-Moskowitz) ───────────────────────
+        # Momentum strategies crash when market bounces off a bear bottom
+        try:
+            import yfinance as _yf_mc
+            _spy_mc = _yf_mc.download("SPY", period="6mo", interval="1d",
+                                      auto_adjust=True, progress=False)
+            if not _spy_mc.empty:
+                _spy_c = _spy_mc["Close"].squeeze().dropna()
+                _spy_max_dd = float((_spy_c / _spy_c.cummax() - 1).min()) * 100
+                _spy_recent = float(_spy_c.iloc[-1] / _spy_c.iloc[-22] - 1) * 100 if len(_spy_c) >= 22 else 0.0
+                # Crash risk = recent bear (-15%+ DD) + sharp bounce (>8% in 1M)
+                _crash_risk = (_spy_max_dd < -15) and (_spy_recent > 8)
+                _mc_score = 25.0 if _crash_risk else 60.0
+                factor_scores["momentum_crash_risk"] = FactorScore(
+                    name="Momentum Crash Risk (Daniel-Moskowitz)",
+                    value=round(_spy_recent, 1),
+                    score=_mc_score,
+                    interpretation=(
+                        f"SPY 6mo DD: {_spy_max_dd:.1f}% | 1M return: {_spy_recent:+.1f}% — "
+                        f"{'MOMENTUM CRASH RISK: post-bear bounce, momentum strategies vulnerable' if _crash_risk else 'no crash setup'}"
+                    ),
+                )
+                if _crash_risk:
+                    warnings.append(f"Momentum crash setup: -{abs(_spy_max_dd):.0f}% DD followed by +{_spy_recent:.0f}% bounce.")
+        except Exception:
+            pass
+
         # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
         try:
             import numpy as _np_pca
@@ -1008,12 +1390,158 @@ class TechnicalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── New: Short-Term Momentum (5-day) ────────────────────────────
+        # Catches stocks that started moving 3-5 days before the 22d signal
+        # fires. Specifically captures sector-rotation pre-move.
+        try:
+            _c5 = ohlcv["Close"].dropna()
+            if len(_c5) >= 6:
+                _mom5 = (_c5.iloc[-1] / _c5.iloc[-6] - 1.0) * 100
+                _mom5_score = (
+                    88.0 if _mom5 >  4.0 else
+                    76.0 if _mom5 >  2.0 else
+                    65.0 if _mom5 >  0.5 else
+                    50.0 if _mom5 > -0.5 else
+                    38.0 if _mom5 > -2.0 else
+                    25.0 if _mom5 > -4.0 else
+                    15.0
+                )
+                factor_scores["momentum_5d"] = FactorScore(
+                    name="5-Day Price Momentum",
+                    value=round(_mom5, 2),
+                    score=_mom5_score,
+                    interpretation=f"5d return: {_mom5:+.2f}% ({'building' if _mom5 > 0.5 else 'fading' if _mom5 < -0.5 else 'flat'})",
+                )
+        except Exception:
+            pass
+
+        # ── New: Sector ETF Momentum ─────────────────────────────────────
+        # When the sector ETF is in a 5-day uptrend, stocks in that sector
+        # get a tailwind boost even if their own signal is mildly bullish.
+        # This directly fixes the missed CRWD/PANW/ZS/DDOG rotation.
+        _SECTOR_ETF = {
+            # Cybersecurity
+            "CRWD": "CIBR", "PANW": "CIBR", "ZS": "CIBR", "FTNT": "CIBR",
+            "NET": "CIBR", "OKTA": "CIBR", "CYBR": "CIBR",
+            # Cloud / Software
+            "SNOW": "IGV",  "DDOG": "IGV",  "MDB": "IGV",  "TEAM": "IGV",
+            "NOW":  "IGV",  "WDAY": "IGV",  "HUBS": "IGV",
+            # Semiconductors
+            "AMAT": "SMH",  "LRCX": "SMH",  "KLAC": "SMH",
+            "MU":   "SMH",  "NVDA": "SMH",  "AMD":  "SMH",  "AVGO": "SMH",
+            "INTC": "SMH",  "QCOM": "SMH",  "TXN":  "SMH",
+            # Broad Tech
+            "AAPL": "XLK",  "MSFT": "XLK",  "GOOGL": "XLK", "META": "XLK",
+            # Financials
+            "JPM":  "XLF",  "BAC": "XLF",   "GS":  "XLF",   "MS":  "XLF",
+            # Energy
+            "XOM":  "XLE",  "CVX": "XLE",   "COP": "XLE",   "PSX": "XLE",
+            # Healthcare
+            "JNJ":  "XLV",  "UNH": "XLV",   "LLY": "XLV",
+            # Consumer Staples
+            "WMT":  "XLP",  "COST":"XLP",
+            # Consumer Discretionary
+            "AMZN": "XLY",  "TSLA":"XLY",   "HD":  "XLY",
+            # Industrials
+            "CAT":  "XLI",  "DE":  "XLI",   "GE":  "XLI",   "HON": "XLI",
+        }
+        try:
+            _sector_etf = _SECTOR_ETF.get(ticker.upper())
+            if _sector_etf:
+                import yfinance as _yf_sec
+                _sec_hist = _yf_sec.download(
+                    _sector_etf, period="15d", interval="1d",
+                    auto_adjust=True, progress=False
+                )
+                _sec_c = _sec_hist["Close"].squeeze().dropna()
+                if len(_sec_c) >= 6:
+                    _sec_mom5 = (_sec_c.iloc[-1] / _sec_c.iloc[-6] - 1.0) * 100
+                    _sec_mom1 = (_sec_c.iloc[-1] / _sec_c.iloc[-2] - 1.0) * 100
+                    _sec_above_ema10 = _sec_c.iloc[-1] > _sec_c.ewm(span=10).mean().iloc[-1]
+                    if _sec_mom5 > 3.0 or (_sec_mom5 > 1.5 and _sec_above_ema10):
+                        _sec_score = 80.0
+                        _sec_interp = f"sector {_sector_etf} +{_sec_mom5:.1f}% (5d) — strong tailwind"
+                    elif _sec_mom5 > 1.0:
+                        _sec_score = 68.0
+                        _sec_interp = f"sector {_sector_etf} +{_sec_mom5:.1f}% (5d) — mild tailwind"
+                    elif _sec_mom5 < -3.0 or (_sec_mom5 < -1.5 and not _sec_above_ema10):
+                        _sec_score = 22.0
+                        _sec_interp = f"sector {_sector_etf} {_sec_mom5:.1f}% (5d) — sector headwind"
+                    elif _sec_mom5 < -1.0:
+                        _sec_score = 36.0
+                        _sec_interp = f"sector {_sector_etf} {_sec_mom5:.1f}% (5d) — mild headwind"
+                    else:
+                        _sec_score = 50.0
+                        _sec_interp = f"sector {_sector_etf} {_sec_mom5:+.1f}% (5d) — neutral"
+                    factor_scores["sector_etf_momentum"] = FactorScore(
+                        name=f"Sector ETF Momentum ({_sector_etf})",
+                        value=round(_sec_mom5, 2),
+                        score=_sec_score,
+                        interpretation=_sec_interp,
+                    )
+        except Exception:
+            pass
+
         # ── 6. Composite Probability ─────────────────────────────────────
-        # Blend core composite (60%) with all factor scores (40%)
-        all_scores = [fs.score for fs in factor_scores.values()]
-        avg_all = sum(all_scores) / len(all_scores) if all_scores else 50.0
+        # Blend core composite (60%) with all factor scores (40%).
+        # sector_etf_momentum and momentum_5d get 1.5x weight in the avg
+        # because they are leading indicators for intraday rotation.
+        _weighted_scores, _weight_total = 0.0, 0.0
+        _LEADING_FACTORS = {"sector_etf_momentum", "momentum_5d", "momentum"}
+        for _fk, _fv in factor_scores.items():
+            _w = 1.5 if _fk in _LEADING_FACTORS else 1.0
+            _weighted_scores += _fv.score * _w
+            _weight_total    += _w
+        avg_all = _weighted_scores / _weight_total if _weight_total else 50.0
         blended = 0.6 * indicators.composite_score + 0.4 * avg_all
         prob_up = self._map_score_to_probability(blended, min_val=0, max_val=100)
+
+        # ── VPIN microstructure overlay (P2a) ────────────────────────────
+        vpin_tag = ""
+        try:
+            from quant_engine.vpin import compute_vpin
+            vpin_res = compute_vpin(ohlcv)
+            if vpin_res:
+                prob_up = max(0.01, min(0.99, prob_up + vpin_res.prob_adjustment))
+                factor_scores["vpin"] = FactorScore(
+                    name="VPIN Microstructure",
+                    value=round(vpin_res.vpin, 4),
+                    score=vpin_res.score,
+                    interpretation=(
+                        f"VPIN={vpin_res.vpin:.3f} trend={vpin_res.vpin_trend:+.3f} "
+                        f"regime={vpin_res.regime} | bucket={vpin_res.bucket_size:.0f}"
+                    ),
+                )
+                vpin_tag = f"VPIN={vpin_res.vpin:.3f} ({vpin_res.regime}). "
+        except Exception:
+            pass
+
+        # ── 0DTE options flow overlay (P2b) ─────────────────────────────
+        zero_dte_tag = ""
+        try:
+            from quant_engine.zero_dte import compute_zero_dte
+            zt_res = compute_zero_dte(
+                ticker, current_price=float(indicators.current_price)
+            )
+            if zt_res:
+                if zt_res.regime != "NEUTRAL":
+                    prob_up = max(0.01, min(0.99, prob_up + zt_res.prob_adjustment))
+                factor_scores["zero_dte_flow"] = FactorScore(
+                    name="0DTE Options Flow",
+                    value=round(zt_res.call_put_premium_ratio, 3),
+                    score=zt_res.score,
+                    interpretation=(
+                        f"DTE={zt_res.days_to_expiry} regime={zt_res.regime} "
+                        f"GEX={zt_res.net_gex:+.1f} CP={zt_res.call_put_premium_ratio:.2f} "
+                        f"strikes={zt_res.n_strikes}"
+                    ),
+                )
+                zero_dte_tag = (
+                    f"0DTE: {zt_res.regime} (GEX={zt_res.net_gex:+.1f}, "
+                    f"CP={zt_res.call_put_premium_ratio:.2f}). "
+                )
+        except Exception:
+            pass
 
         # ── 7. Confidence ────────────────────────────────────────────────
         confidence = 0.4
@@ -1052,6 +1580,7 @@ class TechnicalAgent(BaseAgent):
             )
         if regime_result:
             reasoning += f"HMM Regime: {regime_result.current_regime}. "
+        reasoning += vpin_tag + zero_dte_tag
 
         return AgentResult(
             agent_name=self.name,

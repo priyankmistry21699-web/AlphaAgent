@@ -162,6 +162,9 @@ class GeopoliticalAgent(BaseAgent):
         vix_series = _fetch("^VIX", period="1mo")
         if not vix_series.empty:
             vix = float(vix_series.iloc[-1])
+            # Sanity cap: VIX > 80 is almost certainly corrupted yfinance data
+            if vix > 80:
+                vix = 80.0
             if vix > 30:
                 prob_up -= 0.10
                 confidence += 0.10

@@ -15,6 +15,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, List
 
+import pandas as pd
+
 from langgraph.graph import StateGraph, START, END
 from pydantic import BaseModel, Field
 
@@ -118,17 +120,20 @@ def run_agents_node(state: AlphaGraphState) -> AlphaGraphState:
                 warnings=[f"Agent '{name}' failed: {e}"],
             )
 
-    AGENT_TIMEOUT = 28   # seconds per agent before neutral fallback
+    AGENT_TIMEOUT = 35   # seconds per agent before neutral fallback (relaxed)
+    OUTER_TIMEOUT = AGENT_TIMEOUT + 10   # 45s outer cap on the whole batch
 
-    with ThreadPoolExecutor(max_workers=min(len(active_agents), 9)) as pool:
-        futures = {pool.submit(_run_one, n, a): n for n, a in active_agents.items()}
-        for future in as_completed(futures, timeout=AGENT_TIMEOUT + 5):
+    from agents.state import AgentResult, Direction
+    pool = ThreadPoolExecutor(max_workers=min(len(active_agents), 9))
+    futures = {pool.submit(_run_one, n, a): n for n, a in active_agents.items()}
+
+    try:
+        for future in as_completed(futures, timeout=OUTER_TIMEOUT):
             try:
                 name, res = future.result(timeout=AGENT_TIMEOUT)
             except Exception as e:
                 name = futures[future]
                 logger.warning(f"[{state.ticker}] Agent '{name}' timed out or errored: {e}")
-                from agents.state import AgentResult, Direction
                 res = AgentResult(
                     agent_name=name, vote=Direction.HOLD,
                     probability_up=0.5, confidence=0.0,
@@ -136,6 +141,34 @@ def run_agents_node(state: AlphaGraphState) -> AlphaGraphState:
                 )
             results[name] = res
             logger.info(f"[{state.ticker}] Agent '{name}' finished — P(up)={res.probability_up:.3f}")
+    except TimeoutError as _toe:
+        # The outer as_completed timed out — some futures still pending. Mark
+        # all uncompleted agents as neutral instead of crashing the request.
+        logger.warning(
+            f"[{state.ticker}] Outer agent batch timeout ({OUTER_TIMEOUT}s) — "
+            f"marking {len(futures) - len(results)} unfinished agents as neutral"
+        )
+        for fut, name in futures.items():
+            if name in results:
+                continue
+            if fut.done():
+                try:
+                    n, r = fut.result(timeout=0.1)
+                    results[n] = r
+                    logger.info(f"[{state.ticker}] Late-completed agent '{n}' captured")
+                    continue
+                except Exception:
+                    pass
+            fut.cancel()
+            results[name] = AgentResult(
+                agent_name=name, vote=Direction.HOLD,
+                probability_up=0.5, confidence=0.0,
+                reasoning="BATCH_TIMEOUT: agent did not complete within budget",
+                warnings=[f"Agent '{name}' did not complete (batch timeout)"],
+            )
+    finally:
+        # Don't wait for stragglers — let them die in the background.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     state.agent_results = results
     return state
@@ -167,7 +200,7 @@ def _dynamic_prior(ticker: str) -> float:
     try:
         ref = ticker if not ticker.startswith("^") else "SPY"
         df = _yf.download(ref, period="3mo", interval="1d",
-                          auto_adjust=True, progress=False)
+                          auto_adjust=True)
         closes = df["Close"].squeeze().dropna()
         if len(closes) >= 50:
             sma50 = float(closes.iloc[-50:].mean())
@@ -204,14 +237,19 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
     risk_res = results.get("risk")
     if risk_res:
         risk_text = risk_res.reasoning
-        if any(kw in risk_text for kw in ("CRITICAL RISK", "BLACK SWAN", "FLASH CRASH")):
+        if any(kw in risk_text for kw in ("BLACK SWAN", "FLASH CRASH")):
             is_halted = True
             is_crisis = True
             multiplier = 0.0
             override_reason = next(
-                (kw for kw in ("BLACK SWAN", "FLASH CRASH", "CRITICAL RISK") if kw in risk_text),
+                (kw for kw in ("BLACK SWAN", "FLASH CRASH") if kw in risk_text),
                 "HALT"
             )
+        elif "CRITICAL RISK" in risk_text:
+            is_crisis = True
+            is_halted = False          # signal allowed through, just scaled down
+            multiplier = 0.25
+            override_reason = "CRITICAL RISK: size 25%"
         elif "HIGH RISK" in risk_text:
             is_crisis = True
             multiplier = 0.5
@@ -233,46 +271,149 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
         if not override_reason:
             override_reason = "GEOPOLITICAL OVERRIDE: capped at 35%"
 
-    # ── 2. Bayesian Fusion — dynamic prior from SPY vs 50-day SMA ───────
-    _prior = _dynamic_prior(state.ticker)
-    fusion = BayesianFusion(prior=_prior)
-
-    # Correlation penalties — prevents double-counting overlapping signals
-    CORRELATION_MAP = {
-        "sentiment":    0.20,   # correlated with news/narrative
-        "volatility":   0.40,   # highly correlated with risk agent
-        "geopolitical": 0.25,   # correlated with macro
-        "currency":     0.20,   # correlated with macro
+    # ── 2. Market Regime Detection ───────────────────────────────────────
+    # Determines regime-conditional correlation penalties and agent weights.
+    # Falls back to static defaults if detection fails.
+    _STATIC_CORR = {
+        "sentiment":    0.20,
+        "volatility":   0.40,
+        "geopolitical": 0.25,
+        "currency":     0.20,
     }
+    CORRELATION_MAP = dict(_STATIC_CORR)
+    REGIME_WEIGHTS  = {}
+    market_regime   = None
+
+    try:
+        from quant_engine.regime_weights import (
+            detect_regime, get_regime_correlations, get_regime_weights,
+            MarketRegime,
+        )
+        market_regime   = detect_regime()
+        CORRELATION_MAP = get_regime_correlations(market_regime)
+        REGIME_WEIGHTS  = get_regime_weights(market_regime)
+        logger.info(f"[{state.ticker}] Regime: {market_regime.value}")
+
+        # ── Soft Regime Blending (continuous instead of discrete) ──────────────
+        # Blend regime weights based on HMM probabilities for smoother transitions
+        try:
+            from quant_engine.hmm import RegimeDetector
+            import yfinance as _yf_blend
+            _spy_blend = _yf_blend.download("SPY", period="1y", interval="1d",
+                                            auto_adjust=True, progress=False)
+            if not _spy_blend.empty:
+                _spy_r = _spy_blend["Close"].squeeze().pct_change().dropna()
+                _hmm_b = RegimeDetector(n_states=3).fit_predict(_spy_r)
+                if _hmm_b is not None:
+                    _p_bull = _hmm_b.probabilities.get("bull", 0.5)
+                    _p_bear = _hmm_b.probabilities.get("bear", 0.3)
+                    _p_crisis = _hmm_b.probabilities.get("crisis", 0.2)
+                    # Map HMM probabilities to regime weight tables
+                    _w_bull = get_regime_weights(MarketRegime.BULL_TREND)
+                    _w_chop = get_regime_weights(MarketRegime.BULL_CHOPPY)
+                    _w_bear = get_regime_weights(MarketRegime.BEAR)
+                    _w_cris = get_regime_weights(MarketRegime.CRISIS)
+                    # Soft-blend: high bull_prob → bull weights dominate
+                    _blended = {}
+                    for _ag in _w_bull.keys():
+                        _blended[_ag] = (_p_bull * _w_bull.get(_ag, 0) +
+                                         max(0, _p_bull - 0.3) * _w_chop.get(_ag, 0) +
+                                         _p_bear * _w_bear.get(_ag, 0) +
+                                         _p_crisis * _w_cris.get(_ag, 0))
+                    _tot = sum(_blended.values())
+                    if _tot > 0:
+                        REGIME_WEIGHTS = {k: v / _tot for k, v in _blended.items()}
+                        logger.info(f"[{state.ticker}] Soft-blended weights: bull={_p_bull:.2f} bear={_p_bear:.2f} crisis={_p_crisis:.2f}")
+        except Exception as _blend_e:
+            logger.debug(f"[{state.ticker}] Soft blending fallback: {_blend_e}")
+    except Exception as _re:
+        logger.warning(f"[{state.ticker}] Regime detection failed: {_re}")
+
+    _N_VOTING_AGENTS = max(1, len([n for n in results if n != "risk"]))
+    _AVG_WEIGHT      = 1.0 / _N_VOTING_AGENTS
+
+    # ── 3. Bayesian Fusion — dynamic prior from SPY vs 50-day SMA ───────
+    _prior = _dynamic_prior(state.ticker)
+    from config.settings_manager import settings as _cfg
+    _sensitivity = _cfg.get("agent_defaults.bayesian_sensitivity", 1.4)
+    fusion = BayesianFusion(prior=_prior, sensitivity=_sensitivity)
 
     for agent_name, res in results.items():
         if agent_name == "risk":
             continue  # risk is circuit breaker, not a Bayesian voter
         corr = CORRELATION_MAP.get(agent_name, 0.0)
+        # Scale confidence by regime weight; cap at 3x to avoid extremes
+        regime_w     = REGIME_WEIGHTS.get(agent_name, _AVG_WEIGHT)
+        regime_scale = max(0.3, min(3.0, regime_w / _AVG_WEIGHT)) if _AVG_WEIGHT > 0 else 1.0
         fusion.update(
             agent_prob=res.probability_up,
-            confidence=res.confidence,
+            confidence=res.confidence * regime_scale,
             correlation=corr,
             agent_name=agent_name,
         )
 
     final_prob = fusion.posterior
 
-    # ── 3. Direction & Conviction ────────────────────────────────────────
+    # ── 4. Direction & Conviction ────────────────────────────────────────
     if is_halted:
-        final_prob = 0.5          # neutral — no directional bet when halted
-        direction = Direction.HOLD
+        final_prob = 0.5
+        direction  = Direction.HOLD
         conviction = 0.0
     else:
         conviction = abs(final_prob - 0.5) * 2.0   # 0 = neutral, 1 = max
-        if final_prob > 0.55:
+
+        # Entropy-adaptive gate: widen thresholds when agents disagree (high entropy),
+        # tighten when they strongly agree (low entropy = act on smaller edge)
+        _entropy = fusion.entropy
+        if _entropy > 0.85:
+            _long_gate, _short_gate = 0.56, 0.44   # high disagreement → conservative
+        elif _entropy > 0.70:
+            _long_gate, _short_gate = 0.545, 0.455
+        elif _entropy < 0.40:
+            _long_gate, _short_gate = 0.515, 0.485  # strong consensus → act on small edge
+        else:
+            _long_gate, _short_gate = 0.53, 0.47    # default
+
+        if final_prob > _long_gate:
             direction = Direction.LONG
-        elif final_prob < 0.45:
+        elif final_prob < _short_gate:
             direction = Direction.SHORT
         else:
             direction = Direction.HOLD
 
-    # ── 4. HMM Regime Detection ──────────────────────────────────────────
+    # ── 4.5. Meta-Learner Stacking ───────────────────────────────────────
+    # Blends LightGBM prediction with Bayesian posterior using learned weights.
+    # Falls back silently to pure Bayesian if model not yet trained.
+    try:
+        from quant_engine.meta_learner import get_meta_learner
+        _ml     = get_meta_learner()
+        _a_prbs = {n: r.probability_up for n, r in results.items()}
+        _ml_res = _ml.predict(
+            agent_probs    = _a_prbs,
+            bayesian_prob  = final_prob,
+            conviction     = conviction,
+            entropy        = fusion.entropy,
+            agreement_score= fusion.agreement_score(),
+        )
+        if _ml_res is not None:
+            logger.info(
+                f"[{state.ticker}] MetaLearner: lgbm={_ml_res.lgbm_prob:.3f} "
+                f"w={_ml_res.blend_weight:.2f} → blended={_ml_res.blended_prob:.3f}"
+            )
+            final_prob = _ml_res.blended_prob
+            # Recompute conviction and direction after meta-learner blend
+            conviction = abs(final_prob - 0.5) * 2.0
+            if not is_halted:
+                if final_prob > _long_gate:
+                    direction = Direction.LONG
+                elif final_prob < _short_gate:
+                    direction = Direction.SHORT
+                else:
+                    direction = Direction.HOLD
+    except Exception as _mle:
+        logger.warning(f"[{state.ticker}] Meta-learner failed: {_mle}")
+
+    # ── 5. HMM Regime Detection ──────────────────────────────────────────
     regime_result_obj = None
     try:
         from quant_engine.hmm import RegimeDetector
@@ -289,7 +430,7 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
     except Exception as e:
         logger.warning(f"HMM regime detection failed: {e}")
 
-    # ── 5. Signal Decay / Holding Period ────────────────────────────────
+    # ── 6. Signal Decay / Holding Period ────────────────────────────────
     holding_period_obj = None
     try:
         from quant_engine.signal_decay import SignalDecay
@@ -306,7 +447,7 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
     except Exception as e:
         logger.warning(f"Signal decay calculation failed: {e}")
 
-    # ── 6. Compile the Final Signal Packet ──────────────────────────────
+    # ── 7. Compile the Final Signal Packet ──────────────────────────────
     signal = SignalPacket(
         ticker=state.ticker,
         direction=direction,
@@ -333,14 +474,52 @@ def portfolio_manager_node(state: AlphaGraphState) -> AlphaGraphState:
             f"High System Entropy ({fusion.entropy:.2f}): Agents strongly disagree."
         )
 
+    # ── 8. Portfolio-level risk metrics (per-signal portfolio_risk view) ────
+    portfolio_risk_obj = None
+    try:
+        from quant_engine.portfolio_risk import PortfolioRisk
+        import yfinance as _yf_pr
+        # Single-position "portfolio" of ticker + SPY hedge proxy for marginal risk
+        _peers = [state.ticker, "SPY"]
+        _hist = _yf_pr.download(_peers, period="6mo", interval="1d",
+                                auto_adjust=True, progress=False, group_by="ticker")
+        if not _hist.empty:
+            _rets = {}
+            for _p in _peers:
+                try:
+                    _c = _hist[_p]["Close"].dropna() if len(_peers) > 1 else _hist["Close"].dropna()
+                    _rets[_p] = _c.pct_change().dropna()
+                except Exception:
+                    continue
+            if len(_rets) == 2:
+                _df_pr = pd.DataFrame(_rets).dropna()
+                if len(_df_pr) >= 30:
+                    _pr = PortfolioRisk().analyze(
+                        weights={state.ticker: 1.0, "SPY": 0.0},
+                        returns=_df_pr,
+                    )
+                    if _pr is not None:
+                        portfolio_risk_obj = {
+                            "var_95": _pr.var_95,
+                            "var_99": _pr.var_99,
+                            "cvar_95": _pr.cvar_95,
+                            "portfolio_vol_ann": _pr.portfolio_vol_ann,
+                            "stress_2008": _pr.stress_scenarios.get("GFC_2008"),
+                            "stress_covid": _pr.stress_scenarios.get("COVID_Mar_2020"),
+                        }
+    except Exception as _pre:
+        logger.debug(f"[{state.ticker}] Portfolio risk computation skipped: {_pre}")
+
     state.final_signal = {
-        "packet": signal,
-        "probability_up": final_prob,
-        "multiplier": multiplier,
-        "entropy": fusion.entropy,
-        "risk_res": risk_res,
-        "council": fusion.council_summary(),
+        "packet":          signal,
+        "probability_up":  final_prob,
+        "multiplier":      multiplier,
+        "entropy":         fusion.entropy,
+        "risk_res":        risk_res,
+        "council":         fusion.council_summary(),
         "agreement_score": fusion.agreement_score(),
+        "market_regime":   market_regime.value if market_regime else "UNKNOWN",
+        "portfolio_risk":  portfolio_risk_obj,
     }
     return state
 

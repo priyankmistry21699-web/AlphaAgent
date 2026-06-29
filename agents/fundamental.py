@@ -96,9 +96,20 @@ class FundamentalAgent(BaseAgent):
         }
 
         # ── Valuation Factors ────────────────────────────────────────────
-        pe_cheap = sf.get("pe_cheap", 15)
-        pe_fair = sf.get("pe_fair", 25)
-        pe_expensive = sf.get("pe_expensive", 40)
+        # Dynamic P/E threshold: cheap_PE = 1 / (risk_free_rate + equity_premium)
+        # When 10Y yield is 4.5% + 4% ERP = earnings yield floor of 8.5% → P/E ≈ 11.8
+        # When 10Y yield is 2.0% + 4% ERP = earnings yield floor of 6.0% → P/E ≈ 16.7
+        try:
+            import yfinance as _yf_rf
+            _tnx = _yf_rf.Ticker("^TNX").history(period="3d")["Close"].dropna()
+            _rf_rate = float(_tnx.iloc[-1]) / 100 if len(_tnx) else 0.045
+            pe_cheap     = max(10, min(22, round(1 / (_rf_rate + 0.04))))
+            pe_fair      = pe_cheap + 10
+            pe_expensive = pe_cheap + 25
+        except Exception:
+            pe_cheap     = sf.get("pe_cheap", 15)
+            pe_fair      = sf.get("pe_fair", 25)
+            pe_expensive = sf.get("pe_expensive", 40)
         if scores.pe_ratio > 0:
             pe_score = (100.0 if scores.pe_ratio < pe_cheap
                         else 60.0 if scores.pe_ratio < pe_fair
@@ -989,6 +1000,242 @@ class FundamentalAgent(BaseAgent):
         except Exception:
             pass
 
+        # ── NEW: Earnings Date Proximity (blackout + pre-earnings drift) ────
+        try:
+            import yfinance as _yf_ep
+            import pandas as _pd_ep
+            _cal_ep = _yf_ep.Ticker(ticker).calendar
+            if _cal_ep is not None and not _cal_ep.empty:
+                _earn_col = [c for c in _cal_ep.columns if "Earnings" in str(c)]
+                if _earn_col:
+                    _earn_dt = _pd_ep.to_datetime(_cal_ep[_earn_col[0]].iloc[0])
+                    _days_earn = int((_earn_dt - _pd_ep.Timestamp.now(tz=_earn_dt.tzinfo)).days)
+                    if 0 <= _days_earn <= 5:
+                        factor_scores["earnings_proximity"] = FactorScore(
+                            name="Earnings Proximity",
+                            value=float(_days_earn),
+                            score=20.0,
+                            interpretation=f"Earnings in {_days_earn}d — BLACKOUT: high event risk, avoid new position",
+                        )
+                        warnings.append(f"EARNINGS in {_days_earn} day(s) — high binary risk. Consider skipping.")
+                    elif 5 < _days_earn <= 14:
+                        factor_scores["earnings_proximity"] = FactorScore(
+                            name="Earnings Proximity",
+                            value=float(_days_earn),
+                            score=55.0,
+                            interpretation=f"Earnings in {_days_earn}d — pre-earnings drift window (historically +2-3%)",
+                        )
+                    else:
+                        factor_scores["earnings_proximity"] = FactorScore(
+                            name="Earnings Proximity",
+                            value=float(_days_earn),
+                            score=65.0,
+                            interpretation=f"Earnings in {_days_earn}d — no near-term event risk",
+                        )
+        except Exception:
+            pass
+
+        # ── NEW: FCF Quality Score (FCF > Net Income = real earnings) ────────
+        try:
+            import yfinance as _yf_fcfq
+            _cfstmt = _yf_fcfq.Ticker(ticker).cashflow
+            _incstmt = _yf_fcfq.Ticker(ticker).financials
+            if _cfstmt is not None and not _cfstmt.empty and _incstmt is not None and not _incstmt.empty:
+                _fcf_rows = [r for r in _cfstmt.index if "Free Cash" in str(r) or ("Operating" in str(r) and "Capital" not in str(r))]
+                _capex_rows = [r for r in _cfstmt.index if "Capital" in str(r) and "Expenditure" in str(r)]
+                _ni_rows  = [r for r in _incstmt.index if "Net Income" in str(r)]
+                if _fcf_rows and _ni_rows:
+                    _fcf_val = float(_cfstmt.loc[_fcf_rows[0]].iloc[0])
+                    if _capex_rows:
+                        _fcf_val -= abs(float(_cfstmt.loc[_capex_rows[0]].iloc[0]))
+                    _ni_val  = float(_incstmt.loc[_ni_rows[0]].iloc[0])
+                    _fcf_ratio = _fcf_val / max(abs(_ni_val), 1)
+                    _fcf_score = (88.0 if _fcf_ratio > 1.1 else 68.0 if _fcf_ratio > 0.8
+                                  else 45.0 if _fcf_ratio > 0.5 else 18.0)
+                    factor_scores["fcf_quality"] = FactorScore(
+                        name="FCF Quality (FCF / Net Income)",
+                        value=round(_fcf_ratio, 3),
+                        score=_fcf_score,
+                        interpretation=(
+                            f"FCF/NI = {_fcf_ratio:.2f}x — "
+                            f"{'high quality: cash > accruals' if _fcf_ratio > 1.1 else 'good quality' if _fcf_ratio > 0.8 else 'watch accruals' if _fcf_ratio > 0.5 else 'accruals dominate — earnings quality risk'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── NEW: Analyst Revision Momentum (bull% trending up = quality) ─────
+        try:
+            import yfinance as _yf_arm
+            _recom = _yf_arm.Ticker(ticker).recommendations_summary
+            if _recom is not None and not _recom.empty and len(_recom) >= 2:
+                def _bull_pct(row):
+                    _sb = float(row.get("strongBuy", 0) or 0)
+                    _b  = float(row.get("buy", 0) or 0)
+                    _tot = float(row.sum()) if hasattr(row, "sum") else 1
+                    return (_sb + _b) / max(_tot, 1) * 100
+                _bp_now  = _bull_pct(_recom.iloc[0])
+                _bp_prev = _bull_pct(_recom.iloc[1])
+                _rev_delta = _bp_now - _bp_prev
+                _arm_score = (80.0 if _rev_delta > 8 else 65.0 if _rev_delta > 2
+                              else 45.0 if _rev_delta > -5 else 25.0)
+                factor_scores["analyst_revision_momentum"] = FactorScore(
+                    name="Analyst Revision Momentum",
+                    value=round(_rev_delta, 1),
+                    score=_arm_score,
+                    interpretation=(
+                        f"Bull% now {_bp_now:.0f}% vs prev period {_bp_prev:.0f}% → "
+                        f"Δ{_rev_delta:+.0f}pp | "
+                        f"{'upgrades accelerating' if _rev_delta > 8 else 'mild upgrade trend' if _rev_delta > 2 else 'stable coverage' if _rev_delta > -5 else 'downgrades increasing'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Asset Growth Anomaly (Cooper et al. 2008) ───────────────────
+        try:
+            _ag = getattr(scores, "asset_growth_yoy", None)
+            if _ag is None:
+                _ag = scores.data.get("asset_growth_yoy") if hasattr(scores, "data") else None
+            if _ag is not None:
+                _ag_score = (25.0 if _ag > 25 else   # high asset growth → underperforms
+                             40.0 if _ag > 15 else
+                             60.0 if _ag > 5  else
+                             75.0 if _ag > -5 else 65.0)
+                factor_scores["asset_growth"] = FactorScore(
+                    name="Asset Growth Anomaly",
+                    value=round(float(_ag), 1),
+                    score=_ag_score,
+                    interpretation=(
+                        f"Asset growth YoY: {_ag:+.1f}% — "
+                        f"{'over-investment signal (bearish)' if _ag > 25 else 'rapid expansion, monitor' if _ag > 15 else 'normal growth' if _ag > 5 else 'asset shrinkage (mixed)'}"
+                    ),
+                )
+                if _ag > 25:
+                    warnings.append(f"Rapid asset growth ({_ag:.0f}% YoY) — Cooper anomaly: over-investors underperform.")
+        except Exception:
+            pass
+
+        # ── New: Gross Profitability / Novy-Marx (2013) ───────────────────────
+        try:
+            _gp = getattr(scores, "gross_profitability", None)
+            if _gp is None:
+                _gp = scores.data.get("gross_profitability") if hasattr(scores, "data") else None
+            if _gp is not None:
+                _gp_score = (80.0 if _gp > 40 else
+                             65.0 if _gp > 25 else
+                             50.0 if _gp > 15 else 35.0)
+                factor_scores["gross_profitability"] = FactorScore(
+                    name="Gross Profitability (Novy-Marx)",
+                    value=round(float(_gp), 1),
+                    score=_gp_score,
+                    interpretation=(
+                        f"Gross profit / Assets: {_gp:.1f}% — "
+                        f"{'highly profitable (quality buy)' if _gp > 40 else 'above-avg profitability' if _gp > 25 else 'moderate' if _gp > 15 else 'low gross profitability'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Investment-to-Assets / q-factor ─────────────────────────────
+        try:
+            _ia = getattr(scores, "investment_to_assets", None)
+            if _ia is None:
+                _ia = scores.data.get("investment_to_assets") if hasattr(scores, "data") else None
+            if _ia is not None:
+                _ia_score = (30.0 if _ia > 15 else   # over-investment → underperformance
+                             50.0 if _ia > 8  else
+                             70.0 if _ia > 3  else 65.0)
+                factor_scores["investment_to_assets"] = FactorScore(
+                    name="Investment-to-Assets (q-factor)",
+                    value=round(float(_ia), 1),
+                    score=_ia_score,
+                    interpretation=(
+                        f"CapEx/Assets: {_ia:.1f}% — "
+                        f"{'over-investment (bearish per q-factor)' if _ia > 15 else 'heavy investment phase' if _ia > 8 else 'normal capex' if _ia > 3 else 'asset-light model'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: Net Stock Issuance ───────────────────────────────────────────
+        try:
+            _ni = getattr(scores, "net_issuance_pct", None)
+            if _ni is None:
+                _ni = scores.data.get("net_issuance_pct") if hasattr(scores, "data") else None
+            if _ni is not None:
+                _ni_score = (25.0 if _ni > 5   else   # dilution → bearish
+                             40.0 if _ni > 1   else
+                             60.0 if _ni > -1  else
+                             80.0)                     # buyback → bullish
+                factor_scores["net_issuance"] = FactorScore(
+                    name="Net Stock Issuance",
+                    value=round(float(_ni), 2),
+                    score=_ni_score,
+                    interpretation=(
+                        f"Shares change: {_ni:+.2f}% — "
+                        f"{'significant dilution (bearish)' if _ni > 5 else 'mild dilution' if _ni > 1 else 'flat' if _ni > -1 else 'buyback program (bullish)'}"
+                    ),
+                )
+                if _ni > 5:
+                    warnings.append(f"Share issuance {_ni:.1f}% — dilution signal, firms issue at tops.")
+        except Exception:
+            pass
+
+        # ── New: R&D Anomaly (Chan et al.) ────────────────────────────────────
+        # High R&D / Market Cap → outperformance (capitalized intangibles)
+        try:
+            info_rd = data.get_info() or {}
+            _mcap = float(info_rd.get("marketCap", 0) or 0)
+            _rd = 0.0
+            try:
+                _is = financials.get("income")
+                if _is is not None and not _is.empty:
+                    for k in ["Research And Development", "Research Development", "Research & Development"]:
+                        if k in _is.index:
+                            _rd = abs(float(_is.loc[k].iloc[0] or 0))
+                            break
+            except Exception:
+                pass
+            if _mcap > 0 and _rd > 0:
+                _rd_intensity = _rd / _mcap * 100
+                _rd_score = (78.0 if _rd_intensity > 8 else
+                             65.0 if _rd_intensity > 4 else
+                             55.0 if _rd_intensity > 1 else 50.0)
+                factor_scores["rd_anomaly"] = FactorScore(
+                    name="R&D Anomaly (Chan)",
+                    value=round(_rd_intensity, 2),
+                    score=_rd_score,
+                    interpretation=(
+                        f"R&D/MCap: {_rd_intensity:.2f}% — "
+                        f"{'high R&D intensity (Chan anomaly: bullish)' if _rd_intensity > 8 else 'meaningful R&D' if _rd_intensity > 4 else 'modest R&D' if _rd_intensity > 1 else 'low R&D'}"
+                    ),
+                )
+        except Exception:
+            pass
+
+        # ── New: QMJ Composite — Quality Minus Junk (AQR / Asness) ────────────
+        # Composite of profitability + growth + safety - matches the AQR formulation
+        try:
+            _profitability = (scores.roe / 25.0 if hasattr(scores, "roe") and scores.roe > 0 else 0) + \
+                             (scores.gross_margin / 50.0 if hasattr(scores, "gross_margin") and scores.gross_margin > 0 else 0)
+            _safety = (1.0 - min(scores.debt_to_equity / 3.0, 1.0)) if hasattr(scores, "debt_to_equity") else 0.5
+            _growth = (scores.revenue_growth_yoy / 30.0 if hasattr(scores, "revenue_growth_yoy") else 0)
+            _qmj_raw = (_profitability + _safety + _growth) / 3.0   # 0 to ~2
+            _qmj_norm = max(0.0, min(1.0, _qmj_raw / 1.5))
+            _qmj_score = round(_qmj_norm * 100, 1)
+            factor_scores["qmj_composite"] = FactorScore(
+                name="QMJ Composite (AQR)",
+                value=round(_qmj_raw, 3),
+                score=_qmj_score,
+                interpretation=(
+                    f"QMJ score: {_qmj_norm:.2f} (Prof: {_profitability:.2f} | Safety: {_safety:.2f} | Growth: {_growth:.2f}) — "
+                    f"{'high quality (Q): bullish' if _qmj_norm > 0.65 else 'mid-quality' if _qmj_norm > 0.40 else 'junk (J): bearish'}"
+                ),
+            )
+        except Exception:
+            pass
+
         # ── PCA of Factor Scores (Signal Consensus Quality) ───────────────
         try:
             import numpy as _np_pca
@@ -1046,6 +1293,62 @@ class FundamentalAgent(BaseAgent):
             _qv_blend = sf.get("quality_value_blend", 0.65)
             base_prob = _qv_blend * base_prob + (1.0 - _qv_blend) * val_prob
 
+        # ── PEAD overlay ──────────────────────────────────────────────────
+        pead_tag = ""
+        try:
+            from quant_engine.pead import compute_pead
+            pead = compute_pead(ticker)
+            if pead and pead.decay_factor > 0 and pead.direction != "NEUTRAL":
+                base_prob = max(0.01, min(0.99, base_prob + pead.prob_adjustment))
+                factor_scores["pead_drift"] = FactorScore(
+                    name="PEAD Drift (Post-Earnings Anomaly)",
+                    value=round(pead.sue, 3),
+                    score=pead.score,
+                    interpretation=(
+                        f"{pead.direction} | {pead.days_since_earnings}d since earnings | "
+                        f"SUE={pead.sue:+.2f} | decay={pead.decay_factor:.0%}"
+                    ),
+                )
+                pead_tag = (
+                    f"PEAD: {pead.direction} ({pead.days_since_earnings}d ago, "
+                    f"SUE={pead.sue:+.2f}, decay={pead.decay_factor:.0%}). "
+                )
+        except Exception:
+            pass
+
+        # ── SEC 10-K language-shift NLP (P3a) ─────────────────────────────
+        sec_nlp_tag = ""
+        try:
+            from quant_engine.sec_nlp import compute_10k_shift
+            sec_res = compute_10k_shift(ticker)
+            if sec_res is not None:
+                base_prob = max(0.01, min(0.99, base_prob + sec_res.prob_adjustment))
+                factor_scores["sec_10k_nlp"] = FactorScore(
+                    name="SEC 10-K Language Shift",
+                    value=round(sec_res.cosine_similarity, 3),
+                    score=sec_res.score,
+                    interpretation=f"Regime: {sec_res.regime} | cosine_sim={sec_res.cosine_similarity:.3f}",
+                )
+                sec_nlp_tag = f"SEC 10-K: {sec_res.regime}. "
+        except Exception:
+            pass
+
+        # ── Sector-conditional threshold adjustment (P3c) ─────────────────
+        try:
+            sector = info.get("sector", "")
+            from config.settings_manager import settings as _cfg
+            sector_cfg = _cfg.get("sector_thresholds", {})
+            norm_sector = sector.replace(" ", "_").replace("/", "_") if sector else ""
+            for key, val in sector_cfg.items():
+                if key.lower() in norm_sector.lower() or norm_sector.lower() in key.lower():
+                    # Adjust pe_fair threshold based on sector
+                    sf["pe_fair"] = val.get("pe_fair", sf.get("pe_fair", 25))
+                    sf["pe_expensive"] = val.get("pe_expensive", sf.get("pe_expensive", 40))
+                    sf["pb_fair"] = val.get("pb_fair", sf.get("pb_fair", 3.0))
+                    break
+        except Exception:
+            pass
+
         prob_up = max(0.01, min(0.99, base_prob))
 
         # ── Confidence ────────────────────────────────────────────────────
@@ -1063,6 +1366,7 @@ class FundamentalAgent(BaseAgent):
             f"Fundamental outlook is {direction} ({prob_up * 100:.1f}% probability). "
             f"Piotroski F-Score {scores.piotroski_score}/9 ({scores.f_score_interpretation}). "
         )
+        reasoning += pead_tag + sec_nlp_tag
 
         if scores.altman_z_score > 0:
             reasoning += (

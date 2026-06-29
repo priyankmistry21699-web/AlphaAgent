@@ -51,3 +51,9 @@ htmlcov/
 
 # OS
 desktop.ini
+
+# Accidentally extracted Python wheels (never commit these)
+*.dist-info/
+numpy.libs/
+scipy.libs/
+bin/

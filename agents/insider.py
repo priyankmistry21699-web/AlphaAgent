@@ -64,8 +64,17 @@ class InsiderAgent(BaseAgent):
             eightk_count = edgar_snap.recent_8k_count
             edgar_inst_pct = edgar_snap.institutional_ownership_pct
 
-            # Form 4 cluster signal: many filings in past 30d = insider activity
-            if form4_count >= 5:
+            # Dynamic cluster threshold: scale by market cap
+            # Small-cap (<$10B): 3 filings = cluster; mega-cap (>$100B): 8 filings
+            try:
+                import yfinance as _yf_mcap_f4
+                _mcap_f4 = _yf_mcap_f4.Ticker(ticker).info.get("marketCap", 0) or 0
+                _f4_thresh = 3 if _mcap_f4 < 10e9 else 5 if _mcap_f4 < 100e9 else 8
+            except Exception:
+                _f4_thresh = 5
+
+            # Form 4 cluster signal: many filings in past 60d = insider activity
+            if form4_count >= _f4_thresh:
                 edgar_reasoning.append(
                     f"EDGAR: {form4_count} Form 4 filings in 60d — high insider activity."
                 )
@@ -232,6 +241,13 @@ class InsiderAgent(BaseAgent):
             edgar_snap2 = self.edgar.get_snapshot(ticker)
             form4_filings = edgar_snap2.recent_form4
             # Detect cluster: multiple insiders buying within 30d window
+            # Cluster threshold scales with market cap (small-cap more signal-rich)
+            try:
+                import yfinance as _yf_mcap_c
+                _mcap_c = _yf_mcap_c.Ticker(ticker).info.get("marketCap", 0) or 0
+                _cluster_thresh = 2 if _mcap_c < 10e9 else 3 if _mcap_c < 100e9 else 5
+            except Exception:
+                _cluster_thresh = 3
             if form4_filings:
                 from collections import Counter
                 import datetime
@@ -239,7 +255,7 @@ class InsiderAgent(BaseAgent):
                 recent_30d = [f for f in form4_filings
                               if hasattr(f, 'filed_at') and
                               (today - __import__("datetime").date.fromisoformat(str(f.filed_at)[:10])).days <= 30]
-                if len(recent_30d) >= 3:
+                if len(recent_30d) >= _cluster_thresh:
                     factor_scores["insider_cluster_30d"] = FactorScore(
                         name="Insider Cluster (30-Day)",
                         value=float(len(recent_30d)),

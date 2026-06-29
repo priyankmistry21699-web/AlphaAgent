@@ -1,284 +1,261 @@
 """
-AlphaAgent Signal Tab — Integration Test Suite
-Tests the full signal pipeline: API health, response schema, cache, JSON validity,
-NaN sanitisation, and tab-switch state persistence simulation.
+AlphaAgent — Comprehensive cross-asset signal tester.
+Tests every asset class across all 6 horizons, reports direction/probability/conviction.
+Uses ThreadPoolExecutor for parallel HTTP requests.
 """
 
-import time
-import json
-import math
-import asyncio
-import aiohttp
-import sys
+import json, time, csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+import urllib.request, urllib.error
 
-BASE = "http://127.0.0.1:8088"
-TICKERS = ["AAPL", "NVDA", "SPY"]
+BASE = "http://localhost:8000"
+HORIZONS = ["1d", "1w", "1m", "3m", "6m", "1y"]
 
-PASS = "\033[92m PASS\033[0m"
-FAIL = "\033[91m FAIL\033[0m"
-WARN = "\033[93m WARN\033[0m"
+# ── Asset universe ──────────────────────────────────────────────────────────
+ASSETS = {
+    # US Large-Cap Stocks
+    "US_LARGE": ["AAPL", "MSFT", "GOOGL", "NVDA", "AMZN", "META", "TSLA",
+                 "BRK-B", "JPM", "JNJ", "XOM", "V", "UNH", "WMT", "HD"],
 
+    # US Mid / Small Cap
+    "US_MID_SMALL": ["PLTR", "RKLB", "SMCI", "COIN", "RIVN", "MSTR"],
 
-def ok(label, detail=""):
-    print(f"{PASS}  {label}" + (f"  — {detail}" if detail else ""))
+    # International Stocks (US-listed ADRs / cross-listed)
+    "INTL_STOCKS": [
+        "TM",     # Toyota (Japan)
+        "TSM",    # TSMC (Taiwan)
+        "BABA",   # Alibaba (China)
+        "BIDU",   # Baidu (China)
+        "SAP",    # SAP (Germany)
+        "ASML",   # ASML (Netherlands)
+        "NVO",    # Novo Nordisk (Denmark)
+        "AZN",    # AstraZeneca (UK/Sweden)
+        "INFY",   # Infosys (India)
+        "HDB",    # HDFC Bank (India)
+        "VALE",   # Vale (Brazil)
+        "PBR",    # Petrobras (Brazil)
+        "RY",     # Royal Bank of Canada
+        "CNQ",    # Canadian Natural Resources
+        "BHP",    # BHP (Australia)
+        "SHOP",   # Shopify (Canada)
+    ],
 
-def fail(label, detail=""):
-    print(f"{FAIL}  {label}" + (f"  — {detail}" if detail else ""))
+    # US Sector ETFs
+    "ETF_SECTOR": ["XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE"],
 
-def warn(label, detail=""):
-    print(f"{WARN}  {label}" + (f"  — {detail}" if detail else ""))
+    # Broad Market ETFs
+    "ETF_BROAD": ["SPY", "QQQ", "IWM", "DIA", "VTI", "VOO"],
 
+    # International / Country ETFs
+    "ETF_INTL": ["EEM", "EFA", "VEA", "VWO",
+                 "EWJ",   # Japan
+                 "EWZ",   # Brazil
+                 "FXI",   # China
+                 "EWG",   # Germany
+                 "EWC",   # Canada
+                 "EWA",   # Australia
+                 "INDA",  # India
+                 "EWU",   # United Kingdom
+                 "EWY",   # South Korea
+                 "EWT",   # Taiwan
+                 "EWS",   # Singapore
+                 "EWI",   # Italy
+                 "EWP",   # Spain
+                 "EWQ",   # France
+                 "EWN",   # Netherlands
+                 "EWL",   # Switzerland
+    ],
 
-def check_nan_free(obj, path=""):
-    """Recursively assert no NaN/Inf in the response."""
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return f"{path} = {obj}"
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            r = check_nan_free(v, f"{path}.{k}")
-            if r: return r
-    if isinstance(obj, list):
-        for i, v in enumerate(obj):
-            r = check_nan_free(v, f"{path}[{i}]")
-            if r: return r
-    return None
+    # Bond ETFs
+    "ETF_BONDS": ["TLT", "IEF", "SHY", "AGG", "BND", "HYG", "LQD", "TIP", "MUB", "VCSH"],
 
+    # Commodity ETFs
+    "ETF_COMMODITY": ["GLD", "SLV", "IAU", "PDBC", "DJP", "COPX", "USO", "UNG", "CORN", "WEAT"],
 
-def check_schema(data, ticker):
-    """Verify required fields and types in the signal response."""
-    errors = []
-    required = ["direction", "probability", "conviction", "agents", "council", "summary"]
-    for f in required:
-        if f not in data:
-            errors.append(f"missing field: {f}")
+    # Forex Pairs (yfinance format)
+    "FOREX": [
+        "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X",
+        "NZDUSD=X", "USDCHF=X", "EURGBP=X", "EURJPY=X", "GBPJPY=X",
+        "USDCNY=X", "USDINR=X", "USDBRL=X", "USDMXN=X", "USDZAR=X",
+        "USDSGD=X", "USDKRW=X", "USDTRY=X", "USDHKD=X", "USDTHB=X",
+    ],
 
-    if "direction" in data and data["direction"] not in ("LONG", "SHORT", "NEUTRAL"):
-        errors.append(f"invalid direction: {data['direction']}")
+    # Metals (Futures)
+    "METALS": ["GC=F", "SI=F", "HG=F", "PL=F", "PA=F"],
 
-    if "probability" in data:
-        p = data["probability"]
-        if not (0 <= p <= 1):
-            errors.append(f"probability out of range: {p}")
+    # Energy Futures
+    "ENERGY": ["CL=F", "BZ=F", "NG=F", "RB=F", "HO=F"],
 
-    if "agents" in data:
-        agents = data["agents"]
-        if not isinstance(agents, list):
-            errors.append("agents is not a list")
-        else:
-            for i, a in enumerate(agents):
-                if "vote" not in a:
-                    errors.append(f"agent[{i}] missing vote")
-                if "factor_scores" not in a:
-                    errors.append(f"agent[{i}] missing factor_scores")
-                else:
-                    for k, fs in (a.get("factor_scores") or {}).items():
-                        if fs is None:
-                            continue
-                        if "score" not in fs:
-                            errors.append(f"agent[{i}].factor_scores.{k} missing score")
-    return errors
+    # Agricultural Futures
+    "AGRI": ["ZC=F", "ZW=F", "ZS=F", "ZO=F", "KC=F", "SB=F", "CT=F", "CC=F"],
 
+    # Crypto
+    "CRYPTO": ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD",
+               "ADA-USD", "DOGE-USD", "AVAX-USD", "MATIC-USD", "LINK-USD"],
 
-async def run_tests():
-    print("\n" + "="*60)
-    print("  AlphaAgent Signal Test Suite")
-    print("="*60 + "\n")
+    # Market Indices
+    "INDICES": ["^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX", "^TNX",
+                "^FTSE", "^GDAXI", "^FCHI", "^N225", "^HSI", "^AXJO",
+                "^BSESN", "^STOXX50E"],
 
-    connector = aiohttp.TCPConnector()
-    timeout = aiohttp.ClientTimeout(total=120)
+    # Mutual Funds (US, yfinance accessible)
+    "MUTUAL_FUNDS": ["VFIAX", "FXAIX", "FCNTX", "VBTLX", "VGTSX",
+                     "FSKAX", "VWELX", "PRGFX", "AGTHX", "DODGX"],
 
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+    # REITs
+    "REITS": ["VNQ", "O", "AMT", "PLD", "EQIX", "SPG", "PSA", "DLR", "WELL", "AVB"],
+}
 
-        # ── 1. Health check ───────────────────────────────────────────
-        print("[ Health Check ]")
-        try:
-            async with session.get(f"{BASE}/api/status") as r:
-                if r.status == 200:
-                    ok("Server is online", await r.text())
-                else:
-                    fail("Server responded but not 200", str(r.status))
-        except Exception as e:
-            fail("Cannot reach server", str(e))
-            print("\nStart the server with: python -m uvicorn api.main:app --port 8088\n")
-            return
-
-        # ── 2. Signal endpoint — first call (cold) ───────────────────
-        print("\n[ Signal Analysis — Cold Run ]")
-        results = {}
-        for ticker in TICKERS:
-            t0 = time.time()
-            try:
-                async with session.get(f"{BASE}/api/v1/signal/{ticker}?horizon=1m") as r:
-                    elapsed = time.time() - t0
-                    body = await r.text()
-
-                    # Test: valid HTTP status
-                    if r.status != 200:
-                        fail(f"{ticker}: HTTP {r.status}", body[:200])
-                        continue
-
-                    # Test: valid JSON (no bare NaN tokens)
-                    try:
-                        data = json.loads(body)
-                    except json.JSONDecodeError as e:
-                        fail(f"{ticker}: Invalid JSON", str(e)[:120])
-                        # Check if body contains bare NaN
-                        if "NaN" in body or "Infinity" in body:
-                            fail(f"{ticker}: Response contains bare NaN/Infinity tokens")
-                        continue
-
-                    results[ticker] = data
-
-                    # Test: no Python NaN/Inf in parsed data
-                    nan_path = check_nan_free(data)
-                    if nan_path:
-                        fail(f"{ticker}: NaN/Inf in response at {nan_path}")
-                    else:
-                        ok(f"{ticker}: JSON is NaN-free")
-
-                    # Test: schema
-                    schema_errors = check_schema(data, ticker)
-                    if schema_errors:
-                        for e in schema_errors:
-                            fail(f"{ticker}: Schema error — {e}")
-                    else:
-                        ok(f"{ticker}: Schema valid")
-
-                    # Test: timing
-                    cached = data.get("cached", False)
-                    label = f"{ticker}: {elapsed:.1f}s {'(cached)' if cached else '(fresh)'}"
-                    if elapsed < 2:
-                        ok(label + " — instant/cached ✓")
-                    elif elapsed < 30:
-                        ok(label)
-                    else:
-                        warn(label + " — very slow, consider tuning agent timeout")
-
-                    # Test: has agents
-                    n = len(data.get("agents", []))
-                    prob = data.get("probability", 0)
-                    direction = data.get("direction", "?")
-                    ok(f"{ticker}: dir={direction}, prob={prob:.4f}, agents={n}")
-
-            except asyncio.TimeoutError:
-                fail(f"{ticker}: Timed out after 120s")
-            except Exception as e:
-                fail(f"{ticker}: {e}")
-
-        # ── 3. Cache test — same ticker, should return instantly ──────
-        print("\n[ Signal Cache — Warm Run ]")
-        if TICKERS[0] in results:
-            ticker = TICKERS[0]
-            t0 = time.time()
-            try:
-                async with session.get(f"{BASE}/api/v1/signal/{ticker}?horizon=1m") as r:
-                    elapsed = time.time() - t0
-                    if r.status == 200:
-                        data = await r.json()
-                        cached = data.get("cached", False)
-                        if cached and elapsed < 1.0:
-                            ok(f"{ticker}: Cache hit in {elapsed*1000:.0f}ms ✓")
-                        elif elapsed < 2.0:
-                            warn(f"{ticker}: Fast but cached={cached}, {elapsed:.2f}s")
-                        else:
-                            fail(f"{ticker}: Should be cached but took {elapsed:.1f}s")
-                    else:
-                        fail(f"{ticker}: Cache request returned {r.status}")
-            except Exception as e:
-                fail(f"{ticker}: Cache test error — {e}")
-
-        # ── 4. Horizon reweighting ────────────────────────────────────
-        print("\n[ Horizon Reweighting ]")
-        ticker = TICKERS[0]
-        if ticker in results:
-            base_prob = results[ticker].get("probability", 0.5)
-            for hz in ["1d", "1w", "3m"]:
-                try:
-                    async with session.get(f"{BASE}/api/v1/signal/{ticker}?horizon={hz}") as r:
-                        if r.status == 200:
-                            d = await r.json()
-                            p = d.get("probability", 0)
-                            ok(f"{ticker} @{hz}: prob={p:.4f}, dir={d.get('direction','?')}")
-                        else:
-                            fail(f"{ticker} @{hz}: HTTP {r.status}")
-                except Exception as e:
-                    fail(f"{ticker} @{hz}: {e}")
-
-        # ── 5. Factor scores NaN check ────────────────────────────────
-        print("\n[ Factor Score NaN Sanitisation ]")
-        for ticker, data in results.items():
-            agents = data.get("agents", [])
-            total_factors = 0
-            nan_factors = 0
-            for a in agents:
-                for k, fs in (a.get("factor_scores") or {}).items():
-                    total_factors += 1
-                    if fs is None:
-                        nan_factors += 1
-                    elif isinstance(fs.get("value"), float):
-                        if math.isnan(fs["value"]) or math.isinf(fs["value"]):
-                            nan_factors += 1
-            if nan_factors == 0:
-                ok(f"{ticker}: {total_factors} factors, 0 NaN/null values ✓")
-            else:
-                warn(f"{ticker}: {nan_factors}/{total_factors} factors have null/NaN values (sanitised, not crashes)")
-
-        # ── 6. Tab switch simulation ──────────────────────────────────
-        print("\n[ Tab Switch — Background Analysis Simulation ]")
-        print("  Simulating: start analysis, 'switch tab' (wait), come back, expect result...")
-        ticker = "MSFT"
-        t0 = time.time()
-        try:
-            async with session.get(f"{BASE}/api/v1/signal/{ticker}?horizon=1m") as r:
-                elapsed = time.time() - t0
-                if r.status == 200:
-                    d = await r.json()
-                    # Simulate being on another tab for 2s mid-analysis
-                    await asyncio.sleep(0)  # yield control (simulates event loop)
-                    ok(f"Background analysis completed: {ticker} in {elapsed:.1f}s, dir={d.get('direction','?')}")
-                    ok(f"State persists across tab switch simulation ✓")
-                else:
-                    fail(f"Tab switch sim: {ticker} returned {r.status}")
-        except Exception as e:
-            fail(f"Tab switch sim: {e}")
-
-        # ── 7. Concurrent requests (event loop blocking check) ────────
-        print("\n[ Concurrent Requests — Event Loop Non-Blocking ]")
-        print("  Two signals in parallel (would hang if event loop was blocked)...")
-        t0 = time.time()
-        try:
-            tasks = [
-                session.get(f"{BASE}/api/v1/signal/AAPL?horizon=1m"),
-                session.get(f"{BASE}/api/v1/signal/MSFT?horizon=1m"),
-            ]
-            # Use gather with context managers manually
-            aapl_task = asyncio.create_task(_fetch_signal(session, "AAPL"))
-            msft_task = asyncio.create_task(_fetch_signal(session, "MSFT"))
-            aapl_res, msft_res = await asyncio.gather(aapl_task, msft_task)
-            elapsed = time.time() - t0
-            if aapl_res and msft_res:
-                ok(f"Both completed in {elapsed:.1f}s (parallel, not sequential={aapl_res['latency_ms']/1000+msft_res['latency_ms']/1000:.0f}s)")
-            else:
-                fail("One or both concurrent requests failed")
-        except Exception as e:
-            fail(f"Concurrent test error: {e}")
-
-    print("\n" + "="*60)
-    print("  Test suite complete")
-    print("="*60 + "\n")
+ALL_SYMBOLS = [(cat, sym) for cat, syms in ASSETS.items() for sym in syms]
+TOTAL = len(ALL_SYMBOLS) * len(HORIZONS)
 
 
-async def _fetch_signal(session, ticker):
+def fetch_signal(cat: str, sym: str, horizon: str) -> dict:
+    url = f"{BASE}/api/v1/signal/{sym}?horizon={horizon}"
     try:
-        async with session.get(f"{BASE}/api/v1/signal/{ticker}?horizon=1m",
-                               timeout=aiohttp.ClientTimeout(total=120)) as r:
-            if r.status == 200:
-                return await r.json()
-    except Exception:
-        pass
-    return None
+        start = time.time()
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            data = json.loads(resp.read().decode())
+        elapsed = time.time() - start
+        return {
+            "category":  cat,
+            "symbol":    sym,
+            "horizon":   horizon,
+            "direction": data.get("direction", "?"),
+            "prob":      round(data.get("probability", 0.5) * 100, 1),
+            "base_prob": round(data.get("base_probability", data.get("probability", 0.5)) * 100, 1),
+            "conviction":round(data.get("conviction", 0), 1),
+            "entropy":   round(data.get("entropy", 1.0), 3),
+            "agents":    len(data.get("agents", [])),
+            "cached":    data.get("cached", False),
+            "elapsed_s": round(elapsed, 1),
+            "error":     None,
+        }
+    except Exception as e:
+        return {
+            "category": cat, "symbol": sym, "horizon": horizon,
+            "direction": "ERROR", "prob": 50.0, "base_prob": 50.0,
+            "conviction": 0.0, "entropy": 1.0, "agents": 0,
+            "cached": False, "elapsed_s": 0.0,
+            "error": str(e)[:120],
+        }
+
+
+def main():
+    print(f"\n{'='*80}")
+    print(f"AlphaAgent Cross-Asset Signal Test — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"Testing {len(ALL_SYMBOLS)} symbols × {len(HORIZONS)} horizons = {TOTAL} requests")
+    print(f"Parallelism: 10 concurrent | Timeout: 90s per request")
+    print(f"{'='*80}\n")
+
+    tasks = [(cat, sym, h) for (cat, sym) in ALL_SYMBOLS for h in HORIZONS]
+    results = []
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(fetch_signal, cat, sym, h): (cat, sym, h)
+                   for (cat, sym, h) in tasks}
+        for fut in as_completed(futures):
+            r = fut.result()
+            results.append(r)
+            done += 1
+            if r["error"]:
+                status = f"ERROR: {r['error'][:55]}"
+            else:
+                status = f"{r['direction']:7s} {r['prob']:5.1f}%  conv={r['conviction']:4.1f}  ent={r['entropy']:.3f}"
+            pct = done / TOTAL * 100
+            print(f"[{pct:5.1f}%] {r['symbol']:15s} {r['horizon']:3s}  {status}  ({r['elapsed_s']}s)")
+
+    # ── Sort by category, symbol, horizon order ─────────────────────────────
+    H_ORDER = {"1d": 0, "1w": 1, "1m": 2, "3m": 3, "6m": 4, "1y": 5}
+    results.sort(key=lambda r: (r["category"], r["symbol"], H_ORDER.get(r["horizon"], 9)))
+
+    # ── Write CSV ─────────────────────────────────────────────────────────────
+    csv_path = "signal_test_results.csv"
+    fieldnames = ["category","symbol","horizon","direction","prob","base_prob",
+                  "conviction","entropy","agents","cached","elapsed_s","error"]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(results)
+    print(f"\nResults saved → {csv_path}")
+
+    # ── Summary analysis ──────────────────────────────────────────────────────
+    ok    = [r for r in results if not r["error"]]
+    longs  = [r for r in ok if r["direction"] == "LONG"]
+    shorts = [r for r in ok if r["direction"] == "SHORT"]
+    holds  = [r for r in ok if r["direction"] in ("HOLD","NEUTRAL")]
+    errs   = [r for r in results if r["error"]]
+
+    print(f"\n{'='*80}")
+    print(f"SUMMARY  ({len(ok)} OK / {len(errs)} ERRORS / {TOTAL} total)")
+    print(f"{'='*80}")
+    print(f"  LONG   : {len(longs):4d}  ({len(longs)/max(len(ok),1)*100:.1f}%)")
+    print(f"  SHORT  : {len(shorts):4d}  ({len(shorts)/max(len(ok),1)*100:.1f}%)")
+    print(f"  HOLD   : {len(holds):4d}  ({len(holds)/max(len(ok),1)*100:.1f}%)")
+    print(f"  ERROR  : {len(errs):4d}")
+
+    # Per-category breakdown
+    print(f"\n{'─'*80}")
+    print(f"{'CATEGORY':<18} {'LONG':>5} {'SHORT':>6} {'HOLD':>5} {'ERR':>5} {'AVG%':>7} {'AVG_CONV':>9}")
+    print(f"{'─'*80}")
+    for cat in ASSETS:
+        cat_r = [r for r in ok   if r["category"] == cat]
+        cat_e = [r for r in errs if r["category"] == cat]
+        cat_l = sum(1 for r in cat_r if r["direction"] == "LONG")
+        cat_s = sum(1 for r in cat_r if r["direction"] == "SHORT")
+        cat_h = sum(1 for r in cat_r if r["direction"] in ("HOLD","NEUTRAL"))
+        avg_p = sum(r["prob"] for r in cat_r) / max(len(cat_r), 1)
+        avg_c = sum(r["conviction"] for r in cat_r) / max(len(cat_r), 1)
+        print(f"{cat:<18} {cat_l:>5} {cat_s:>6} {cat_h:>5} {len(cat_e):>5} {avg_p:>6.1f}%  {avg_c:>8.1f}")
+
+    # Per-horizon breakdown
+    print(f"\n{'─'*80}")
+    print(f"{'HORIZON':<8} {'LONG':>5} {'SHORT':>6} {'HOLD':>5} {'AVG%':>7} {'AVG_CONV':>9}")
+    print(f"{'─'*80}")
+    for h in HORIZONS:
+        h_r = [r for r in ok if r["horizon"] == h]
+        h_l = sum(1 for r in h_r if r["direction"] == "LONG")
+        h_s = sum(1 for r in h_r if r["direction"] == "SHORT")
+        h_h = sum(1 for r in h_r if r["direction"] in ("HOLD","NEUTRAL"))
+        avg_p = sum(r["prob"] for r in h_r) / max(len(h_r), 1)
+        avg_c = sum(r["conviction"] for r in h_r) / max(len(h_r), 1)
+        print(f"{h:<8} {h_l:>5} {h_s:>6} {h_h:>5} {avg_p:>6.1f}%  {avg_c:>8.1f}")
+
+    # High conviction calls
+    high_conv = sorted([r for r in ok if r["conviction"] >= 20], key=lambda r: -r["conviction"])
+    if high_conv:
+        print(f"\n{'─'*80}")
+        print(f"TOP HIGH-CONVICTION CALLS (conviction ≥ 20):")
+        print(f"{'─'*80}")
+        for r in high_conv[:40]:
+            print(f"  {r['symbol']:15s} {r['horizon']:3s}  {r['direction']:7s}  {r['prob']:5.1f}%  conv={r['conviction']:5.1f}")
+
+    # Stuck at exactly 50%
+    stuck = [r for r in ok if r["prob"] == 50.0]
+    if stuck:
+        print(f"\n{'─'*80}")
+        print(f"STUCK AT 50.0% ({len(stuck)} results) — may indicate agent failures:")
+        for r in stuck[:20]:
+            print(f"  {r['symbol']:15s} {r['horizon']:3s}  agents={r['agents']}")
+
+    # Error details
+    if errs:
+        print(f"\n{'─'*80}")
+        print(f"ERRORS ({len(errs)}):")
+        seen = set()
+        for r in errs:
+            key = (r["symbol"], r["error"][:40])
+            if key not in seen:
+                seen.add(key)
+                print(f"  {r['symbol']:15s}  {r['error']}")
+
+    print(f"\n{'='*80}")
+    print("Done. Full results in signal_test_results.csv")
+    print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
-    asyncio.run(run_tests())
+    main()

@@ -122,6 +122,32 @@ class VolatilityAgent(BaseAgent):
                 interpretation=f"IV/RV ratio: {iv_rv_ratio:.2f}x",
             )
 
+            # ── Variance Risk Premium: VRP = IV² − RV² (annualised %) ────────
+            # Positive VRP = options overpriced vs realised vol → mean-revert bullish
+            # Negative VRP = vol expansion expected → bearish
+            try:
+                _iv_ann  = opt_res.implied_move_pct / np.sqrt(max(1, trading_days) / 252)
+                _rv_ann  = garch_res.vol_1day_daily * np.sqrt(252)
+                _vrp     = (_iv_ann ** 2 - _rv_ann ** 2) * 100   # in variance units × 100
+                _vrp_score = (70.0 if _vrp > 5   else   # positive VRP → vol sellers win → mild bullish
+                              55.0 if _vrp > 0   else
+                              40.0 if _vrp > -5  else 25.0)
+                factor_scores["variance_risk_premium"] = FactorScore(
+                    name="Variance Risk Premium (IV²−RV²)",
+                    value=round(_vrp, 2),
+                    score=_vrp_score,
+                    interpretation=(
+                        f"VRP: {_vrp:+.2f} | IV_ann={_iv_ann*100:.1f}% RV_ann={_rv_ann*100:.1f}% — "
+                        f"{'positive VRP: options overpriced, vol crush likely' if _vrp > 5 else 'near-zero VRP: fair pricing' if abs(_vrp) < 5 else 'negative VRP: vol expansion expected'}"
+                    ),
+                )
+                if _vrp > 10:
+                    prob_up += 0.03   # systematic vol-selling premium
+                elif _vrp < -10:
+                    prob_up -= 0.03
+            except Exception:
+                pass
+
         # ── 4. Kalman Dynamic Beta + SPY Correlation ─────────────────────
         try:
             from data.market import MarketData
@@ -196,6 +222,81 @@ class VolatilityAgent(BaseAgent):
                 )
                 if term_struct < -2.0:
                     reasoning.append(f"VIX in backwardation ({term_struct:.1f}) — acute market stress signal.")
+        except Exception:
+            pass
+
+        # ── New: Realized Skewness (3rd moment of recent returns) ─────────────
+        try:
+            if returns is not None and len(returns) >= 30:
+                _r60 = returns.iloc[-60:].dropna() if len(returns) >= 60 else returns.dropna()
+                _mu  = float(_r60.mean())
+                _sig = float(_r60.std())
+                if _sig > 0:
+                    _rskew = float(((_r60 - _mu) ** 3).mean() / (_sig ** 3))
+                    _rs_score = (75.0 if _rskew > 0.5 else      # positive skew = bullish tail
+                                 60.0 if _rskew > 0   else
+                                 40.0 if _rskew > -0.5 else 25.0)  # negative skew = crash risk
+                    factor_scores["realized_skewness"] = FactorScore(
+                        name="Realized Skewness (60d)",
+                        value=round(_rskew, 3),
+                        score=_rs_score,
+                        interpretation=(
+                            f"Realized skew: {_rskew:+.3f} — "
+                            f"{'positive skew: bullish tail dominance' if _rskew > 0.5 else 'slight positive skew' if _rskew > 0 else 'negative skew: crash risk' if _rskew < -0.5 else 'mild negative skew'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: Volatility Arbitrage Signal (explicit VRP trade) ────────────
+        try:
+            from quant_engine.vol_arbitrage import compute_vol_arbitrage
+            _ohlcv_va = data.get_ohlcv(period="6mo")
+            if (opt_res.implied_move_pct > 0 and _ohlcv_va is not None
+                    and len(_ohlcv_va) >= 65):
+                _iv_for_va = max(0.05, min(2.0, opt_res.implied_move_pct))
+                _vas = compute_vol_arbitrage(ticker, _iv_for_va, _ohlcv_va, 60)
+                if _vas is not None:
+                    _vas_score = (75.0 if _vas.signal == "SHORT_VOL" else
+                                  25.0 if _vas.signal == "LONG_VOL" else 50.0)
+                    factor_scores["vol_arbitrage"] = FactorScore(
+                        name="Vol Arbitrage (VRP Trade)",
+                        value=_vas.vrp_z_score,
+                        score=_vas_score,
+                        interpretation=(
+                            f"VRP={_vas.vrp:+.2f} | IV {_vas.iv_annual*100:.1f}% / RV {_vas.rv_annual*100:.1f}% | z={_vas.vrp_z_score:+.2f} | edge~{_vas.expected_edge_bps:.0f}bps — "
+                            f"{'vol rich → SHORT vol (sell straddles)' if _vas.signal == 'SHORT_VOL' else 'vol cheap → LONG vol (buy straddles)' if _vas.signal == 'LONG_VOL' else 'fair vol'}"
+                        ),
+                    )
+        except Exception:
+            pass
+
+        # ── New: Yang-Zhang Vol vs Close-to-Close (efficient OHLC estimator) ─
+        try:
+            from quant_engine.vol_estimators import yang_zhang_vol, garman_klass_vol
+            _ohlcv_vol = data.get_ohlcv(period="3mo")
+            if _ohlcv_vol is not None and len(_ohlcv_vol) >= 25:
+                _yz = yang_zhang_vol(_ohlcv_vol["Open"], _ohlcv_vol["High"],
+                                     _ohlcv_vol["Low"], _ohlcv_vol["Close"], 20)
+                _gk = garman_klass_vol(_ohlcv_vol["Open"], _ohlcv_vol["High"],
+                                       _ohlcv_vol["Low"], _ohlcv_vol["Close"], 20)
+                _cc = float(_ohlcv_vol["Close"].pct_change().tail(20).std() * np.sqrt(252))
+                if _yz and _gk:
+                    _yz_pct = _yz * 100
+                    _eff_gain = abs(_yz - _cc) / max(_cc, 1e-6)
+                    _yzs_score = (35.0 if _yz_pct > 50 else
+                                  50.0 if _yz_pct > 30 else
+                                  65.0 if _yz_pct > 15 else 75.0)
+                    factor_scores["yang_zhang_vol"] = FactorScore(
+                        name="Yang-Zhang Vol (OHLC efficient)",
+                        value=round(_yz_pct, 2),
+                        score=_yzs_score,
+                        interpretation=(
+                            f"Yang-Zhang ann vol: {_yz_pct:.1f}% | Garman-Klass: {_gk*100:.1f}% | Close-to-close: {_cc*100:.1f}% — "
+                            f"{'extreme vol' if _yz_pct > 50 else 'elevated' if _yz_pct > 30 else 'moderate' if _yz_pct > 15 else 'low'} "
+                            f"(YZ {_eff_gain*100:+.0f}% efficiency vs CC)"
+                        ),
+                    )
         except Exception:
             pass
 

@@ -85,8 +85,14 @@ class CurrencyData:
 
         snap = CurrencySnapshot()
 
-        # DXY
+        # DXY — fallback to UUP ETF if DX-Y.NYB returns garbage
         dxy_series = self._fetch_series("DX-Y.NYB", period="6mo")
+        dxy_val = float(dxy_series.iloc[-1]) if len(dxy_series) >= 2 else 0.0
+        if not (70.0 <= dxy_val <= 130.0):
+            dxy_series = self._fetch_series("UUP", period="6mo")
+            dxy_val = float(dxy_series.iloc[-1]) if len(dxy_series) >= 2 else 0.0
+            if not (20.0 <= dxy_val <= 40.0):
+                dxy_series = pd.Series(dtype=float)
         if len(dxy_series) >= 2:
             snap.dxy = float(dxy_series.iloc[-1])
             snap.dxy_1m_change = float(
@@ -100,16 +106,27 @@ class CurrencyData:
         else:
             snap.warnings.append("DXY data unavailable")
 
-        # Individual pairs
+        # Individual pairs — with sanity bounds to reject corrupted yfinance data
+        _FX_BOUNDS = {
+            "eurusd":  (0.70, 1.60),
+            "usdjpy":  (80.0, 200.0),
+            "usdcny":  (5.50, 9.00),
+            "gbpusd":  (0.90, 1.70),
+        }
         for attr, ticker in [
             ("eurusd", "EURUSD=X"),
-            ("usdjpy", "JPY=X"),
-            ("usdcny", "CNY=X"),
+            ("usdjpy", "USDJPY=X"),
+            ("usdcny", "USDCNY=X"),
             ("gbpusd", "GBPUSD=X"),
         ]:
             s = self._fetch_series(ticker, period="5d")
             if not s.empty:
-                setattr(snap, attr, float(s.iloc[-1]))
+                val = float(s.iloc[-1])
+                lo, hi = _FX_BOUNDS.get(attr, (0.0, 1e9))
+                if lo <= val <= hi:
+                    setattr(snap, attr, val)
+                else:
+                    snap.warnings.append(f"{ticker} value {val:.4f} out of expected range [{lo},{hi}] — skipped")
 
         # EM currency stress: average 1-month change in USD vs EM FX
         em_changes = []

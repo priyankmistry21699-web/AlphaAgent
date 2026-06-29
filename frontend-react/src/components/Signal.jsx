@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, dirColor, priceColor, fmtNum } from '../api.js';
-import { HZ_LABELS, TICKER_CATEGORIES, AGENT_THEORIES, QUICK_CHIPS } from '../constants.js';
+import { HZ_LABELS, TICKER_CATEGORIES, AGENT_THEORIES, QUICK_CHIPS, TOP_TICKERS } from '../constants.js';
 
 import AgentRow from './AgentRow.jsx';
 import AIAssistant from './AIAssistant.jsx';
@@ -44,9 +44,16 @@ export default function SignalTab({ isActive }) {
   const [holdersTab, setHoldersTab] = useState('institutional');
   const [tickerInfo, setTickerInfo] = useState(null);
   const [activeCat, setActiveCat] = useState('us');
+  const [activeSub, setActiveSub] = useState('stocks');
+  const [mktSummary, setMktSummary] = useState(null);
   const inputRef = useRef(null);
   const abortRef = useRef(null);
   const genRef = useRef(0);
+
+  // Load market summary once on mount
+  useEffect(() => {
+    api.marketSummary().then(s => setMktSummary(s)).catch(() => {});
+  }, []);
 
   // Handle pending ticker from Market tab "Analyze" button
   useEffect(() => {
@@ -139,6 +146,7 @@ export default function SignalTab({ isActive }) {
   const agents = signal?.agents || [];
   const council = signal?.council || [];
   const agreementScore = signal?.agreement_score ?? 0;
+  const marketRegime = signal?.market_regime || null;
   const holding = signal?.holding_period || {};
   const hzLabel = HZ_LABELS[horizon] || horizon.toUpperCase();
   const dColor = dirColor(dir);
@@ -150,9 +158,13 @@ export default function SignalTab({ isActive }) {
     <div>
       {/* Tabbed ticker browser */}
       <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
+        {/* Row 1: Country tabs */}
         <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid var(--border)', scrollbarWidth: 'none' }}>
           {TICKER_CATEGORIES.map(cat => (
-            <button key={cat.id} onClick={() => setActiveCat(cat.id)} style={{
+            <button key={cat.id} onClick={() => {
+              setActiveCat(cat.id);
+              setActiveSub(cat.sub?.[0]?.id || 'stocks');
+            }} style={{
               flexShrink: 0, padding: '7px 12px', fontSize: 11, border: 'none', cursor: 'pointer',
               background: 'transparent', whiteSpace: 'nowrap',
               color: activeCat === cat.id ? 'var(--text)' : 'var(--dim)',
@@ -162,13 +174,38 @@ export default function SignalTab({ isActive }) {
             }}>{cat.label}</button>
           ))}
         </div>
+        {/* Row 2: Sub-category tabs (Stocks / ETFs / Sectors / Indices / Crypto …) */}
+        {(() => {
+          const subs = TICKER_CATEGORIES.find(c => c.id === activeCat)?.sub || [];
+          return subs.length > 1 ? (
+            <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid var(--border)', scrollbarWidth: 'none', background: 'var(--card2)' }}>
+              {subs.map(s => (
+                <button key={s.id} onClick={() => setActiveSub(s.id)} style={{
+                  flexShrink: 0, padding: '5px 11px', fontSize: 10, border: 'none', cursor: 'pointer',
+                  background: 'transparent', whiteSpace: 'nowrap',
+                  color: activeSub === s.id ? 'var(--cyan)' : 'var(--dim)',
+                  fontWeight: activeSub === s.id ? 700 : 400,
+                  borderBottom: activeSub === s.id ? '2px solid var(--cyan)' : '2px solid transparent',
+                  transition: 'all .15s',
+                }}>{s.label}</button>
+              ))}
+            </div>
+          ) : null;
+        })()}
+        {/* Row 3: Ticker chips */}
         <div style={{ display: 'flex', gap: 5, overflowX: 'auto', padding: '7px 10px', flexWrap: 'nowrap', scrollbarWidth: 'none' }}>
-          {(TICKER_CATEGORIES.find(c => c.id === activeCat)?.tickers || []).map(t => (
-            <button key={t.sym} className="chip" title={t.name}
-              onClick={() => { setTicker(t.sym); runSignal(t.sym, horizon); }}
-              style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
-            >{t.sym}</button>
-          ))}
+          {(() => {
+            const cat = TICKER_CATEGORIES.find(c => c.id === activeCat);
+            const tickers = cat?.sub?.find(s => s.id === activeSub)?.tickers
+              || cat?.sub?.[0]?.tickers
+              || [];
+            return tickers.map(t => (
+              <button key={t.sym} className="chip" title={t.name}
+                onClick={() => { setTicker(t.sym); runSignal(t.sym, horizon); }}
+                style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+              >{t.sym}</button>
+            ));
+          })()}
         </div>
       </div>
 
@@ -217,23 +254,53 @@ export default function SignalTab({ isActive }) {
 
         {/* ── LEFT PANEL: Live chart + stock data + prediction ── */}
         <div className="signal-left">
+
+          {/* Market Summary strip — always visible */}
+          {mktSummary && (() => {
+            const indices = [
+              ...(mktSummary.us     || []).slice(0, 3),
+              ...(mktSummary.assets || []).filter(a => /BTC|Gold|Oil/i.test(a.label)).slice(0, 2),
+            ];
+            return (
+              <div className="card" style={{ padding: '8px 10px', marginBottom: 8 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 6 }}>Market Summary</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {indices.map(m => {
+                    const pos = (m.change_pct ?? 0) >= 0;
+                    const c   = pos ? 'var(--green)' : 'var(--red)';
+                    const fp  = v => v == null ? '—' : v >= 10000 ? v.toLocaleString('en-US', { maximumFractionDigits: 0 }) : v >= 1000 ? v.toLocaleString('en-US', { maximumFractionDigits: 1 }) : v.toFixed(2);
+                    return (
+                      <div key={m.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 10, color: 'var(--dim2)', fontWeight: 600, minWidth: 90 }}>{m.label}</span>
+                        <span style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text)', fontWeight: 700 }}>{fp(m.price)}</span>
+                        <span style={{ fontSize: 10, color: c, fontFamily: 'monospace', fontWeight: 700, minWidth: 54, textAlign: 'right' }}>
+                          {pos ? '▲' : '▼'} {Math.abs(m.change_pct ?? 0).toFixed(2)}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           {signal && (
             <>
               <PriceChart
                 ticker={signal.ticker}
                 sector={tickerInfo?.sector}
-                currentPrice={tickerInfo?.price}
+                currentPrice={tickerInfo?.price ?? signal?.current_price}
               />
 
-              {/* Quote stats */}
-              {tickerInfo && (() => {
-                const p = tickerInfo.price;
-                const chg = tickerInfo.change ?? 0;
-                const chgPct = tickerInfo.change_pct ?? 0;
-                const isPos = chgPct >= 0;
-                const pc = isPos ? 'var(--green)' : 'var(--red)';
-                const lo52 = tickerInfo.week52_low;
-                const hi52 = tickerInfo.week52_high;
+              {/* Quote stats — renders from signal.current_price immediately, upgrades with full tickerInfo */}
+              {(() => {
+                const p      = tickerInfo?.price ?? signal?.current_price ?? null;
+                const chg    = tickerInfo?.change ?? 0;
+                const chgPct = tickerInfo?.change_pct ?? signal?.change_pct ?? 0;
+                const isPos  = chgPct >= 0;
+                const pc     = isPos ? 'var(--green)' : 'var(--red)';
+                const lo52   = tickerInfo?.week52_low;
+                const hi52   = tickerInfo?.week52_high;
                 const rangePct = (p && lo52 && hi52 && hi52 > lo52)
                   ? ((p - lo52) / (hi52 - lo52) * 100).toFixed(0) : null;
                 const fmtV = (v, dec = 2) => {
@@ -244,48 +311,56 @@ export default function SignalTab({ isActive }) {
                   if (Math.abs(v) >= 1e3)  return (v / 1e3).toFixed(1) + 'K';
                   return Number(v).toFixed(dec);
                 };
+                if (p == null) return null;
                 return (
                   <>
                     {/* Price header */}
                     <div className="card" style={{ padding: '10px 12px' }}>
                       <div style={{ fontSize: 9, color: 'var(--dim)', marginBottom: 4 }}>
-                        {tickerInfo.short_name}
-                        {tickerInfo.exchange && <span style={{ marginLeft: 6, color: 'var(--dim)' }}>· {tickerInfo.exchange}</span>}
+                        {tickerInfo?.short_name || signal.ticker}
+                        {tickerInfo?.exchange && <span style={{ marginLeft: 6, color: 'var(--dim)' }}>· {tickerInfo.exchange}</span>}
+                        {!tickerInfo && <span style={{ marginLeft: 6, color: 'var(--dim)', fontStyle: 'italic' }}>loading details…</span>}
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 }}>
                         <span style={{ fontSize: 22, fontWeight: 900, fontFamily: 'monospace', color: 'var(--text)' }}>
-                          {p != null ? `$${p.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}
+                          {`$${p.toLocaleString('en-US', { maximumFractionDigits: 2 })}`}
                         </span>
                         <div style={{ textAlign: 'right' }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: pc, fontFamily: 'monospace' }}>
-                            {isPos ? '+' : ''}{chg.toFixed(2)}
-                          </div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: pc }}>
-                            {isPos ? '▲' : '▼'} {Math.abs(chgPct).toFixed(2)}%
-                          </div>
+                          {chg !== 0 && (
+                            <div style={{ fontSize: 12, fontWeight: 700, color: pc, fontFamily: 'monospace' }}>
+                              {isPos ? '+' : ''}{chg.toFixed(2)}
+                            </div>
+                          )}
+                          {chgPct !== 0 && (
+                            <div style={{ fontSize: 10, fontWeight: 700, color: pc }}>
+                              {isPos ? '▲' : '▼'} {Math.abs(chgPct).toFixed(2)}%
+                            </div>
+                          )}
                         </div>
                       </div>
 
-                      {/* OHLCV grid */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 8px', fontSize: 10 }}>
-                        {[
-                          ['Open',  tickerInfo.open],
-                          ['High',  tickerInfo.high],
-                          ['Close', tickerInfo.close],
-                          ['Low',   tickerInfo.low],
-                        ].map(([label, val]) => (
-                          <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ color: 'var(--dim)' }}>{label}</span>
-                            <span style={{ color: 'var(--text)', fontFamily: 'monospace', fontWeight: 600 }}>
-                              {val != null ? `$${val.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}
-                            </span>
+                      {/* OHLCV grid — only when tickerInfo available */}
+                      {tickerInfo && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 8px', fontSize: 10 }}>
+                          {[
+                            ['Open',  tickerInfo.open],
+                            ['High',  tickerInfo.high],
+                            ['Close', tickerInfo.close],
+                            ['Low',   tickerInfo.low],
+                          ].map(([label, val]) => (
+                            <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ color: 'var(--dim)' }}>{label}</span>
+                              <span style={{ color: 'var(--text)', fontFamily: 'monospace', fontWeight: 600 }}>
+                                {val != null ? `$${val.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}
+                              </span>
+                            </div>
+                          ))}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gridColumn: '1/-1' }}>
+                            <span style={{ color: 'var(--dim)' }}>Volume</span>
+                            <span style={{ color: 'var(--text)', fontFamily: 'monospace', fontWeight: 600 }}>{fmtV(tickerInfo.volume, 0)}</span>
                           </div>
-                        ))}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gridColumn: '1/-1' }}>
-                          <span style={{ color: 'var(--dim)' }}>Volume</span>
-                          <span style={{ color: 'var(--text)', fontFamily: 'monospace', fontWeight: 600 }}>{fmtV(tickerInfo.volume, 0)}</span>
                         </div>
-                      </div>
+                      )}
 
                       {/* 52-week range bar */}
                       {rangePct != null && (
@@ -303,33 +378,35 @@ export default function SignalTab({ isActive }) {
                       )}
                     </div>
 
-                    {/* Key metrics */}
-                    <div className="card" style={{ padding: '10px 12px' }}>
-                      <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--cyan)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 8 }}>Key Metrics</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px 8px', fontSize: 10 }}>
-                        {[
-                          ['Mkt Cap',  fmtV(tickerInfo.market_cap)],
-                          ['P/E (TTM)', tickerInfo.pe_trailing?.toFixed(1) ?? '—'],
-                          ['Beta',     tickerInfo.beta?.toFixed(2) ?? '—'],
-                          ['Fwd P/E',  tickerInfo.pe_forward?.toFixed(1) ?? '—'],
-                          ['EPS',      tickerInfo.eps != null ? `$${tickerInfo.eps.toFixed(2)}` : '—'],
-                          ['Div Yld',  tickerInfo.dividend_yield != null ? `${(tickerInfo.dividend_yield * 100).toFixed(2)}%` : '—'],
-                        ].map(([label, val]) => (
-                          <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ color: 'var(--dim)' }}>{label}</span>
-                            <span style={{ color: 'var(--text)', fontFamily: 'monospace', fontWeight: 600 }}>{val}</span>
-                          </div>
-                        ))}
-                        {tickerInfo.industry && (
-                          <div style={{ gridColumn: '1/-1', color: 'var(--dim)', fontSize: 9, borderTop: '1px solid var(--border)', paddingTop: 4, marginTop: 2 }}>
-                            {tickerInfo.industry}
-                          </div>
-                        )}
+                    {/* Key metrics — only when tickerInfo available */}
+                    {tickerInfo && (
+                      <div className="card" style={{ padding: '10px 12px' }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--cyan)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 8 }}>Key Metrics</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '5px 8px', fontSize: 10 }}>
+                          {[
+                            ['Mkt Cap',   fmtV(tickerInfo.market_cap)],
+                            ['P/E (TTM)', tickerInfo.pe_trailing?.toFixed(1) ?? '—'],
+                            ['Beta',      tickerInfo.beta?.toFixed(2) ?? '—'],
+                            ['Fwd P/E',   tickerInfo.pe_forward?.toFixed(1) ?? '—'],
+                            ['EPS',       tickerInfo.eps != null ? `$${tickerInfo.eps.toFixed(2)}` : '—'],
+                            ['Div Yld',   tickerInfo.dividend_yield != null ? `${(tickerInfo.dividend_yield * 100).toFixed(2)}%` : '—'],
+                          ].map(([label, val]) => (
+                            <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ color: 'var(--dim)' }}>{label}</span>
+                              <span style={{ color: 'var(--text)', fontFamily: 'monospace', fontWeight: 600 }}>{val}</span>
+                            </div>
+                          ))}
+                          {tickerInfo.industry && (
+                            <div style={{ gridColumn: '1/-1', color: 'var(--dim)', fontSize: 9, borderTop: '1px solid var(--border)', paddingTop: 4, marginTop: 2 }}>
+                              {tickerInfo.industry}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {/* About / description */}
-                    {tickerInfo.description && (
+                    {tickerInfo?.description && (
                       <div className="card" style={{ padding: '10px 12px' }}>
                         <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--cyan)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 5 }}>About</div>
                         <div style={{ fontSize: 10, color: 'var(--dim2)', lineHeight: 1.65 }}>
@@ -601,10 +678,10 @@ export default function SignalTab({ isActive }) {
               })()}
 
               {/* Price Range Forecast */}
-              {tickerInfo?.price && (() => {
-                const price    = tickerInfo.price;
-                const hi52     = tickerInfo.week52_high;
-                const lo52     = tickerInfo.week52_low;
+              {(tickerInfo?.price || signal?.current_price || (tickerInfo?.closes?.length > 0)) && (() => {
+                const price    = tickerInfo?.price || signal?.current_price || tickerInfo?.closes?.[tickerInfo.closes.length - 1];
+                const hi52     = tickerInfo?.week52_high;
+                const lo52     = tickerInfo?.week52_low;
                 const annualVol = (hi52 && lo52 && hi52 > lo52)
                   ? Math.log(hi52 / lo52) / 2.7 : 0.28;
                 const holdDays = holding.half_life_days ||
@@ -744,6 +821,22 @@ export default function SignalTab({ isActive }) {
                     {agents.filter(a => (a.vote || '').toUpperCase() === 'HOLD').length}H
                   </div>
                 </div>
+                {marketRegime && marketRegime !== 'UNKNOWN' && (() => {
+                  const regimeMap = {
+                    BULL_TREND:  { label: 'Bull Trend',  color: 'var(--green)',  icon: '📈' },
+                    BULL_CHOPPY: { label: 'Bull Choppy', color: 'var(--yellow)', icon: '〰️' },
+                    BEAR:        { label: 'Bear',         color: 'var(--red)',    icon: '📉' },
+                    CRISIS:      { label: 'Crisis',       color: '#ff4444',       icon: '⚠️' },
+                  };
+                  const r = regimeMap[marketRegime] || { label: marketRegime, color: 'var(--dim)', icon: '🔍' };
+                  return (
+                    <div className="metric-card">
+                      <div className="metric-lbl">Market Regime</div>
+                      <div className="metric-val" style={{ color: r.color, fontSize: 15 }}>{r.icon} {r.label}</div>
+                      <div className="metric-sub" style={{ color: 'var(--dim)' }}>Regime-Weighted Fusion</div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Agent Breakdown */}
@@ -845,12 +938,18 @@ export default function SignalTab({ isActive }) {
               <div className="card-header">
                 <span className="card-title">🐋 Smart Money — {signal.ticker}</span>
                 <span style={{ fontSize: 10, color: 'var(--dim)' }}>
-                  {holdersLoading ? '⏳ Loading…' : holders ? 'Institutional · Mutual Funds · Congressional · Insider' : 'No data'}
+                  {holdersLoading ? '⏳ Loading…' : holders?.rate_limited ? '⚠️ Rate limited' : holders ? 'Institutional · Mutual Funds · Congressional · Insider' : 'No data'}
                 </span>
               </div>
 
+              {holders?.rate_limited && !holdersLoading && (
+                <div style={{ padding: '12px 16px', color: 'var(--yellow)', fontSize: 12, background: 'rgba(255,200,0,.06)', borderBottom: '1px solid var(--border)' }}>
+                  Yahoo Finance is rate-limiting requests for {signal.ticker}. Smart Money data will load automatically once the limit clears — try again in 30–60 seconds.
+                </div>
+              )}
+
               {/* Tab buttons */}
-              {holders && (
+              {holders && !holders.rate_limited && (
                 <>
                   <div style={{ display: 'flex', gap: 4, padding: '6px 12px', borderBottom: '1px solid var(--border)' }}>
                     {[

@@ -51,14 +51,14 @@ class SentimentAgent(BaseAgent):
         self.news_db.fetch_and_store_news(ticker)
 
         now_ts = int(datetime.now().timestamp())
-        twelve_hours_ago = now_ts - (12 * 3600)
+        two_days_ago = now_ts - (48 * 3600)
 
         query = f"lawsuits, earnings, bankruptcy, growth, new products, {ticker}"
         retrieved_articles = self.news_db.search_news(
             query,
             ticker=ticker,
-            n_results=5,
-            where={"timestamp": {"$gte": twelve_hours_ago}},
+            n_results=8,
+            where={"timestamp": {"$gte": two_days_ago}},
         )
 
         rag_prob = 0.5
@@ -707,7 +707,38 @@ REASON: [A strict 2-sentence explanation focusing on behavioral economics and se
         try:
             import time as _t_nd
             import math as _math_nd
-            _nd_hl    = settings.get("backtest.news_decay_halflife_days", 4.6)
+            # Dynamic half-life: shorter near earnings (news moves faster pre-event)
+            _nd_hl_base = settings.get("backtest.news_decay_halflife_days", 4.6)
+            # VIX-adaptive halflife: news decays faster in high-vol regimes
+            try:
+                import yfinance as _yf_hl
+                _vix_hl = _yf_hl.download("^VIX", period="5d", interval="1d",
+                                          auto_adjust=True, progress=False)
+                if not _vix_hl.empty:
+                    _vix_now_hl = float(_vix_hl["Close"].squeeze().dropna().iloc[-1])
+                    if _vix_now_hl > 30:
+                        _nd_hl_base = min(_nd_hl_base, 2.0)   # fast decay in crisis
+                    elif _vix_now_hl > 20:
+                        _nd_hl_base = min(_nd_hl_base, 3.5)   # moderate decay elevated vol
+                    elif _vix_now_hl < 14:
+                        _nd_hl_base = max(_nd_hl_base, 6.0)   # slow decay in calm market
+            except Exception:
+                pass
+            try:
+                import pandas as _pd_nd_hl
+                _cal_nd = yf.Ticker(ticker).calendar
+                if _cal_nd is not None and not _cal_nd.empty:
+                    _ec = [c for c in _cal_nd.columns if "Earnings" in str(c)]
+                    if _ec:
+                        _ed = _pd_nd_hl.to_datetime(_cal_nd[_ec[0]].iloc[0])
+                        _de = int((_ed - _pd_nd_hl.Timestamp.now(tz=_ed.tzinfo)).days)
+                        if 0 <= _de <= 7:
+                            _nd_hl_base = 1.5   # very fast decay around earnings
+                        elif 7 < _de <= 21:
+                            _nd_hl_base = 2.8   # faster decay pre-earnings
+            except Exception:
+                pass
+            _nd_hl    = _nd_hl_base
             _nd_decay = _math_nd.log(2) / _nd_hl
             _nd_news  = yf.Ticker(ticker).news or []
             if _nd_news:
@@ -808,6 +839,74 @@ REASON: [A strict 2-sentence explanation focusing on behavioral economics and se
                 if _squeeze_risk:
                     reasoning.append(f"Short-squeeze candidate: {_sf_pct:.0f}% float short, {_days_cover:.1f}d to cover.")
                     prob_up += 0.03
+        except Exception:
+            pass
+
+        # ── New: Earnings Whisper Proxy (Implied Move vs Historical Move) ───
+        # Options straddle price / stock price = implied expected move.
+        # Compare to historical post-earnings moves to gauge whether the
+        # market is pricing in a bigger-than-usual catalyst.
+        try:
+            import numpy as _np_ew
+            _tkr_ew  = yf.Ticker(ticker)
+            _exps_ew = _tkr_ew.options
+            _info_ew = _tkr_ew.info or {}
+            _curr_p  = (_info_ew.get("currentPrice") or
+                        _info_ew.get("regularMarketPrice"))
+            if _exps_ew and _curr_p and float(_curr_p) > 0:
+                _cp = float(_curr_p)
+                _chain_ew = _tkr_ew.option_chain(_exps_ew[0])
+                # ATM = within 2% of current price, min 10 OI
+                _atm_calls_ew = _chain_ew.calls[
+                    (abs(_chain_ew.calls["strike"] - _cp) / _cp < 0.02) &
+                    (_chain_ew.calls["openInterest"].fillna(0) > 10)
+                ]
+                _atm_puts_ew = _chain_ew.puts[
+                    (abs(_chain_ew.puts["strike"] - _cp) / _cp < 0.02) &
+                    (_chain_ew.puts["openInterest"].fillna(0) > 10)
+                ]
+                if not _atm_calls_ew.empty and not _atm_puts_ew.empty:
+                    _c_bid = float(_atm_calls_ew["bid"].fillna(0).iloc[0])
+                    _c_ask = float(_atm_calls_ew["ask"].fillna(0).iloc[0])
+                    _p_bid = float(_atm_puts_ew["bid"].fillna(0).iloc[0])
+                    _p_ask = float(_atm_puts_ew["ask"].fillna(0).iloc[0])
+                    _straddle = ((_c_bid + _c_ask) / 2) + ((_p_bid + _p_ask) / 2)
+                    _impl_move_pct = (_straddle / _cp) * 100
+
+                    # Historical large-move days (>4%) as earnings-move proxy
+                    _hist_ew = _tkr_ew.history(period="2y", interval="1d")
+                    _hist_moves = []
+                    if not _hist_ew.empty and len(_hist_ew) > 30:
+                        _rets_ew = _hist_ew["Close"].pct_change().dropna().abs()
+                        _hist_moves = list(_rets_ew[_rets_ew > 0.04].values * 100)
+
+                    if _hist_moves and _impl_move_pct > 0:
+                        _hist_avg_ew  = float(_np_ew.mean(
+                            _hist_moves[-8:] if len(_hist_moves) >= 4 else _hist_moves
+                        ))
+                        _whisper_ratio = _impl_move_pct / _hist_avg_ew if _hist_avg_ew > 0 else 1.0
+                        if _whisper_ratio > 1.5:
+                            _ew_score, _ew_label = 70.0, "ELEVATED EVENT RISK"
+                        elif _whisper_ratio > 1.2:
+                            _ew_score, _ew_label = 62.0, "above-avg premium"
+                        elif _whisper_ratio < 0.7:
+                            _ew_score, _ew_label = 55.0, "options cheap — complacency?"
+                        else:
+                            _ew_score, _ew_label = 50.0, "normal premium"
+                        factor_scores["earnings_whisper"] = FactorScore(
+                            name="Earnings Whisper (Implied vs Historical Move)",
+                            value=round(_whisper_ratio, 3),
+                            score=_ew_score,
+                            interpretation=(
+                                f"Straddle implies {_impl_move_pct:.1f}% move vs "
+                                f"hist avg {_hist_avg_ew:.1f}% — {_ew_label}"
+                            ),
+                        )
+                        if _whisper_ratio > 1.5:
+                            reasoning.append(
+                                f"Earnings whisper: options pricing {_impl_move_pct:.1f}% move "
+                                f"vs {_hist_avg_ew:.1f}% hist avg — elevated event risk."
+                            )
         except Exception:
             pass
 

@@ -181,10 +181,25 @@ def compute_indicators(df: pd.DataFrame, ticker: str = "") -> IndicatorResult:
         result.warnings.append(f"MACD error: {e}")
     
     # ═══════════════════════════════════════════════════════
-    #  Bollinger Bands
+    #  Bollinger Bands — VIX-adaptive std (2.5σ when VIX>25, 1.75σ when VIX<15)
     # ═══════════════════════════════════════════════════════
     try:
-        bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
+        _bb_std = 2.0
+        try:
+            import yfinance as _yf_bb
+            _vix_bb = _yf_bb.download("^VIX", period="5d", interval="1d",
+                                      auto_adjust=True, progress=False)
+            if not _vix_bb.empty:
+                _vix_val = float(_vix_bb["Close"].squeeze().dropna().iloc[-1])
+                if _vix_val > 25:
+                    _bb_std = 2.5   # widen bands in high-vol regime
+                elif _vix_val < 15:
+                    _bb_std = 1.75  # tighten bands in low-vol calm market
+                else:
+                    _bb_std = 2.0 + (_vix_val - 15) / 10 * 0.5   # linear blend 15→25
+        except Exception:
+            pass
+        bb = ta.volatility.BollingerBands(close, window=20, window_dev=_bb_std)
         result.bb_upper = float(bb.bollinger_hband().iloc[-1])
         result.bb_middle = float(bb.bollinger_mavg().iloc[-1])
         result.bb_lower = float(bb.bollinger_lband().iloc[-1])

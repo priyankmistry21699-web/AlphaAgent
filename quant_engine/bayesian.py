@@ -36,10 +36,13 @@ class BayesianFusion:
     Tracks each agent's contribution as a "council convergence" path.
     """
 
-    def __init__(self, prior: float = 0.5):
+    def __init__(self, prior: float = 0.5, sensitivity: float = 1.4):
         self.prior = min(0.99, max(0.01, prior))
         self.log_odds_posterior = np.log(self.prior / (1.0 - self.prior))
         self.council: List[CouncilStep] = []
+        # sensitivity > 1 amplifies weak signals so near-neutral agents (P≈0.52)
+        # still move the posterior meaningfully. 1.4 = 40% amplification.
+        self.sensitivity = sensitivity
 
     def update(self, agent_prob: float, correlation: float = 0.0,
                confidence: float = 1.0, agent_name: str = "") -> None:
@@ -49,8 +52,11 @@ class BayesianFusion:
         prob_before = self.posterior
         agent_prob = min(0.99, max(0.01, agent_prob))
 
-        evidence_log_odds = np.log(agent_prob / (1.0 - agent_prob))
-        evidence_log_odds *= confidence
+        # Extract likelihood ratio relative to the prior so that agents sharing
+        # the same prior don't double-count evidence already in the posterior.
+        prior_log_odds = np.log(self.prior / (1.0 - self.prior))
+        evidence_log_odds = np.log(agent_prob / (1.0 - agent_prob)) - prior_log_odds
+        evidence_log_odds *= confidence * self.sensitivity
         penalty_factor = 1.0 - correlation
         effective_weight = confidence * penalty_factor
 

@@ -75,7 +75,11 @@ class AgentLeaderboard:
             if not agent_data:
                 logger.info("[Leaderboard] No logged predictions — returning demo.")
                 return self._demo_leaderboard(window_days)
-            return self._score_agents(agent_data, window_days)
+            result = self._score_agents(agent_data, window_days)
+            if not result.scores:
+                logger.info("[Leaderboard] No settled predictions yet (<5 days old) — returning demo.")
+                return self._demo_leaderboard(window_days)
+            return result
         except Exception as e:
             logger.error(f"[Leaderboard] Evaluation failed: {e}")
             return self._demo_leaderboard(window_days)
@@ -169,6 +173,58 @@ class AgentLeaderboard:
         finally:
             db.close()
 
+    # ── Batch price fetching ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_price_cache(tickers: List[str], start_date: str) -> Dict[str, "pd.Series"]:
+        """Single batch yfinance download for all tickers, returns {ticker: Close series}."""
+        import yfinance as yf
+        import pandas as pd
+
+        cache: Dict[str, "pd.Series"] = {}
+        if not tickers:
+            return cache
+        try:
+            if len(tickers) == 1:
+                df = yf.download(tickers[0], start=start_date,
+                                 auto_adjust=True, progress=False)
+                if not df.empty:
+                    s = df["Close"].dropna()
+                    if s.index.tz is not None:
+                        s.index = s.index.tz_localize(None)
+                    cache[tickers[0]] = s
+            else:
+                df = yf.download(tickers, start=start_date,
+                                 auto_adjust=True, progress=False,
+                                 group_by="ticker")
+                for tkr in tickers:
+                    try:
+                        s = df[tkr]["Close"].dropna()
+                        if s.index.tz is not None:
+                            s.index = s.index.tz_localize(None)
+                        cache[tkr] = s
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"[Leaderboard] Batch price fetch failed: {e}")
+        return cache
+
+    @staticmethod
+    def _forward_return(series: "pd.Series", ts, forward_days: int = _FORWARD_DAYS):
+        """Return forward_days-ahead return for the series at timestamp ts, or None."""
+        import pandas as pd
+        try:
+            ts_norm = pd.Timestamp(ts).tz_localize(None) if getattr(ts, "tzinfo", None) else pd.Timestamp(ts)
+            pos = int(series.index.searchsorted(ts_norm))
+            if pos + forward_days >= len(series):
+                return None
+            entry = float(series.iloc[pos])
+            if entry <= 0:
+                return None
+            return float(series.iloc[pos + forward_days]) / entry - 1
+        except Exception:
+            return None
+
     # ── Scoring ───────────────────────────────────────────────────────────────
 
     def _score_agents(
@@ -176,8 +232,30 @@ class AgentLeaderboard:
         agent_data: Dict[str, List[dict]],
         window_days: int,
     ) -> LeaderboardResult:
-        import yfinance as yf
-        import pandas as pd
+        from datetime import datetime, timedelta
+
+        # Only evaluate predictions that have settled (5+ trading days = ~5 cal)
+        settle_cutoff = datetime.utcnow() - timedelta(days=5)
+
+        # Collect all unique tickers and oldest timestamp for download range
+        all_tickers: List[str] = []
+        seen: set = set()
+        oldest = datetime.utcnow()
+        for preds in agent_data.values():
+            for p in preds:
+                t = p["ticker"]
+                if t not in seen:
+                    seen.add(t)
+                    all_tickers.append(t)
+                ts = p["timestamp"]
+                if hasattr(ts, "tzinfo") and ts.tzinfo:
+                    ts = ts.replace(tzinfo=None)
+                if ts < oldest:
+                    oldest = ts
+
+        start_date = (oldest - timedelta(days=3)).strftime("%Y-%m-%d")
+        logger.info(f"[Leaderboard] Batch downloading {len(all_tickers)} tickers from {start_date}")
+        price_cache = self._build_price_cache(all_tickers, start_date)
 
         scores: List[AgentScore] = []
         total_evaluated = 0
@@ -186,28 +264,23 @@ class AgentLeaderboard:
             probs, actuals, confidences, fwd_returns = [], [], [], []
 
             for pred in predictions:
-                try:
-                    ticker = pred["ticker"]
-                    ts = pred["timestamp"]
-                    prob = pred["probability"]
-                    conf = pred["confidence"]
+                ts = pred["timestamp"]
+                ts_naive = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+                if ts_naive > settle_cutoff:
+                    continue  # not settled yet
 
-                    df = yf.download(
-                        ticker, start=ts, period=f"{_FORWARD_DAYS + 3}d",
-                        interval="1d", auto_adjust=True, progress=False,
-                    )
-                    if isinstance(df.columns, pd.MultiIndex):
-                        df.columns = df.columns.get_level_values(0)
-                    if len(df) < 2:
-                        continue
-
-                    actual_ret = float(df["Close"].iloc[-1] / df["Close"].iloc[0] - 1)
-                    probs.append(prob)
-                    actuals.append(1 if actual_ret > 0 else 0)
-                    confidences.append(conf)
-                    fwd_returns.append(actual_ret)
-                except Exception:
+                series = price_cache.get(pred["ticker"])
+                if series is None or series.empty:
                     continue
+
+                ret = self._forward_return(series, ts_naive)
+                if ret is None:
+                    continue
+
+                probs.append(pred["probability"])
+                actuals.append(1 if ret > 0 else 0)
+                confidences.append(pred["confidence"])
+                fwd_returns.append(ret)
 
             if len(probs) < 3:
                 continue
@@ -222,26 +295,23 @@ class AgentLeaderboard:
             brier = float(np.mean((p - y) ** 2))
             avg_conf = float(np.mean(c))
 
-            # ── IC: Pearson corr between (prob - 0.5) and forward return ──────
             centered_p = p - 0.5
             if centered_p.std() > 0 and r.std() > 0:
                 ic_mean = float(np.corrcoef(centered_p, r)[0, 1])
             else:
                 ic_mean = 0.0
 
-            # Rolling IC in windows of 20 signals
-            window = 20
+            window_size = 20
             rolling_ic = []
-            for start in range(0, len(p) - window + 1, window // 2):
-                w_p = centered_p[start:start + window]
-                w_r = r[start:start + window]
+            for start in range(0, len(p) - window_size + 1, window_size // 2):
+                w_p = centered_p[start:start + window_size]
+                w_r = r[start:start + window_size]
                 if w_p.std() > 0 and w_r.std() > 0:
                     rolling_ic.append(round(float(np.corrcoef(w_p, w_r)[0, 1]), 4))
 
             ic_ir = float(np.mean(rolling_ic) / np.std(rolling_ic)) \
                 if len(rolling_ic) >= 2 and np.std(rolling_ic) > 0 else ic_mean
 
-            # ── Annualised Information Ratio (signal return quality) ──────────
             outcomes = np.where(predicted_dir == y, 1.0, -1.0)
             ir_std = float(outcomes.std())
             ir = float(outcomes.mean() / ir_std * np.sqrt(252)) if ir_std > 0 else 0.0
@@ -263,7 +333,6 @@ class AgentLeaderboard:
         for i, s in enumerate(scores):
             s.rank = i + 1
 
-        # Derive weight suggestions from IC_IR
         weight_suggestions = self._derive_weights(scores)
 
         return LeaderboardResult(

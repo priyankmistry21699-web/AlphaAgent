@@ -114,15 +114,27 @@ class MarketData:
         
         # Fetch from yfinance
         logger.info(f"[{self.ticker}] Fetching OHLCV: period={period}, interval={interval}")
+        df = pd.DataFrame()
         try:
             df = self._yf_ticker.history(period=period, interval=interval)
         except Exception as e:
             logger.error(f"[{self.ticker}] yfinance error: {e}")
-            return pd.DataFrame()
-        
+
         # Validate and clean
         df = validate_ohlcv(df, self.ticker)
-        
+
+        # Polygon.io fallback when yfinance is rate-limited or returns empty
+        if df.empty and interval == "1d":
+            logger.warning(f"[{self.ticker}] yfinance empty — trying Polygon.io fallback")
+            try:
+                from data.polygon_client import ohlcv_fallback
+                pg_df = ohlcv_fallback(self.ticker, period)
+                if pg_df is not None and not pg_df.empty:
+                    df = validate_ohlcv(pg_df, self.ticker)
+                    logger.info(f"[{self.ticker}] Polygon fallback: {len(df)} rows")
+            except Exception as pe:
+                logger.debug(f"[{self.ticker}] Polygon fallback error: {pe}")
+
         if df.empty:
             logger.warning(f"[{self.ticker}] No valid OHLCV data")
             return df

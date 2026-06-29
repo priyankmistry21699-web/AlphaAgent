@@ -26,11 +26,11 @@ export const TOP_TICKERS = [
 export const AGENT_THEORIES = {
   Technical: {
     color: 'tag-blue',
-    tags: ['RSI','MACD','ADX','Bollinger','EMA 9/21','Hurst','HMM','TDA','GEX','IV Skew','Max Pain','VRP','OBV','VWAP','PCA'],
+    tags: ['RSI','MACD','ADX','Bollinger','EMA 9/21','Hurst','HMM','TDA','GEX','IV Skew','Max Pain','VRP','OBV','VWAP','VPIN','0DTE Flow','PCA'],
   },
   Fundamental: {
     color: 'tag-green',
-    tags: ['Piotroski','Altman Z','Beneish M','P/E','P/B','FCF Yield','ROE','FF5','CAPM Alpha','Accruals','M&A Activity','PCA'],
+    tags: ['Piotroski','Altman Z','Beneish M','P/E','P/B','FCF Yield','ROE','FF5','CAPM Alpha','Accruals','M&A Activity','PEAD Drift','PCA'],
   },
   Macro: {
     color: 'tag-purple',
@@ -38,7 +38,7 @@ export const AGENT_THEORIES = {
   },
   Sentiment: {
     color: 'tag-orange',
-    tags: ['NLP News','Short Int','Fear/Greed','P/C Ratio','Transfer Entropy','Shannon Entropy','AAII','PT Upside','Source Cred','HL/Body Align'],
+    tags: ['NLP News','Short Int','Fear/Greed','P/C Ratio','Transfer Entropy','Shannon Entropy','AAII','PT Upside','Source Cred','HL/Body Align','Earnings Whisper'],
   },
   Insider: {
     color: 'tag-cyan',
@@ -46,7 +46,7 @@ export const AGENT_THEORIES = {
   },
   Risk: {
     color: 'tag-red',
-    tags: ['Kelly','GARCH','EVT VaR','Quasi-MC','KL Div','Hawkes','Black Swan','Carry'],
+    tags: ['Kelly','GARCH','EVT VaR','Quasi-MC','KL Div','Hawkes','Black Swan','Carry','CDS Proxy'],
   },
   Geopolitical: {
     color: 'tag-yellow',
@@ -119,6 +119,12 @@ export const FACTOR_ENC = {
   iv_vs_rv: { fullName: 'IV vs Realized Volatility Ratio', category: 'Volatility', formula: 'Ratio = 30d Implied Vol / 30d Realized Vol  |  >1 = options rich', valueUnit: 'Ratio', great: '<0.85 — options cheap, good to buy calls', good: '0.85–1.0', neutral: '~1.0', bad: '1.0–1.3 — options mildly expensive', terrible: '>1.3 — very expensive, event risk priced in', note: 'High IV/RV ratio = fear premium in options. Mean-reverts after events resolve.' },
   vix_term_structure: { fullName: 'VIX Term Structure (Contango/Backwardation)', category: 'Volatility', formula: 'VX1/VX2 ratio. Contango: VX1<VX2 (normal). Backwardation: VX1>VX2 (stress)', valueUnit: 'Front/back ratio', great: 'Deep contango <0.90 — calm, vol sellers winning', good: 'Normal contango 0.90–0.97', neutral: '~1.0 flat', bad: 'Backwardation beginning >1.0', terrible: '>1.10 backwardation — crisis conditions', note: 'VIX curve backwardation has historically been a short-term buy signal after fear peak.' },
   garch_regime: { fullName: 'GARCH Regime Probability', category: 'Volatility / Regime', formula: 'Regime state from GARCH volatility level thresholds', valueUnit: 'Regime (low/medium/high vol)', great: 'Low-vol regime — trending market', good: 'Transitioning to low-vol', neutral: 'Medium-vol regime', bad: 'High-vol regime — uncertainty', terrible: 'Extreme-vol regime — crisis state', note: 'Regime change from high to low vol is bullish. From low to high is bearish.' },
+  // ── New factors (Phase 7+) ──────────────────────────────────────────────
+  vpin: { fullName: 'VPIN — Volume-Sync. Prob. of Informed Trading', category: 'Microstructure', formula: 'VPIN = rolling mean |Buys−Sells|/BucketSize over last 50 vol-buckets (Easley, López de Prado & O\'Hara 2012)', valueUnit: '0–1 toxicity ratio', great: '<0.25 — low toxicity, safe liquidity', good: '0.25–0.50 — moderate order flow', neutral: '~0.50', bad: '0.50–0.65 — elevated informed trading', terrible: '>0.65 — HIGH toxicity, informed front-running likely', note: 'VPIN spikes precede volatility cascades. Rising VPIN trend = smart money entering.' },
+  zero_dte_flow: { fullName: '0DTE Options Flow (Same-Day Expiry)', category: 'Options / Microstructure', formula: 'Net call OI − put OI (ATM ±5%) + Net dealer GEX = Σ(Gamma×OI×100) calls − puts', valueUnit: 'CP ratio + GEX score', great: 'CALL_DOMINATED: CP>1.3 & OI ratio>0.35 — aggressive call buying, dealers buy stock', good: 'CALL_LEAN: mild call flow', neutral: 'NEUTRAL — balanced put/call', bad: 'PUT_LEAN: mild put flow', terrible: 'PUT_DOMINATED: CP<0.75 & OI ratio<−0.35 — put hedging, dealers sell stock', note: '0DTE options are ~50% of all US equity options volume. Dealer hedging creates self-fulfilling momentum.' },
+  pead_drift: { fullName: 'PEAD — Post-Earnings Announcement Drift', category: 'Earnings / Behavioral', formula: 'SUE = (Actual EPS − Estimated EPS) / StdDev(EPS surprise). Drift = sign(SUE) × decay × prob_adj', valueUnit: 'SUE (standardized units)', great: 'SUE>2.0 beat, <20d ago — strong drift continuation', good: 'SUE 0.5–2.0 beat', neutral: 'SUE near 0 or >45d ago', bad: 'SUE −0.5 to −2.0 miss', terrible: 'SUE<−2.0 miss, <20d ago — strong negative drift', note: 'Bernard & Thomas (1989): markets under-react to earnings for 30–60 days. SUE>1 stocks beat by ~4% over 60d.' },
+  cds_proxy: { fullName: 'CDS Spread Proxy (HYG/LQD Ratio)', category: 'Credit / Risk', formula: 'Ratio = HYG/LQD price. Credit spread proxy: ratio_1m = (Ratio[t]/Ratio[t−20d] − 1)×100', valueUnit: '1-month % change in HYG/LQD', great: '>+2% — credit tightening, high-yield outperforms IG → bullish equity', good: '+0.5 to +2% — mild credit improvement', neutral: '±0.5% stable', bad: '−1.5 to −3% — credit stress starting', terrible: '<−3% — HYG underperforms LQD, credit spreads widening → bearish equity', note: 'Credit leads equity by days-to-weeks. HYG/LQD deterioration precedes equity selloffs.' },
+  earnings_whisper: { fullName: 'Earnings Whisper — Implied vs Historical Move', category: 'Options / Event Risk', formula: 'Ratio = ATM Straddle Price / Current Price ÷ Avg Historical Post-Earnings Move (>4% days)', valueUnit: 'Implied/Historical ratio', great: 'Ratio<0.7 — options cheap vs history (complacency opportunity)', good: '0.7–1.0 — slightly below avg premium', neutral: '1.0–1.2 — normal premium', bad: '1.2–1.5 — above-average event pricing', terrible: '>1.5 — ELEVATED EVENT RISK, market pricing major catalyst', note: 'The "whisper" is what the options market implies beyond consensus. High ratio = event-driven volatility expected.' },
 };
 
 export const QUICK_CHIPS = [
